@@ -75,10 +75,17 @@ def summarize(cfg: CfxConfig) -> dict[str, Any]:
     data = cfg.data
     if data:
         setups = data.get("setups", [])
+        oos = data.get("out_of_sample", {})
+        ranges = oos.get("ranges", [])
+        
         summary["data"] = {
             "num_setups": len(setups),
             "charts": [],
-            "out_of_sample_ranges": len(data.get("out_of_sample", {}).get("ranges", [])),
+            "out_of_sample_ranges": len(ranges),
+            "out_of_sample": {
+                "showGraph": oos.get("showGraph", "true"),
+                "ranges": ranges,
+            },
         }
         for s in setups:
             for chart in s.get("charts", []):
@@ -87,10 +94,16 @@ def summarize(cfg: CfxConfig) -> dict[str, Any]:
                     "timeframe": chart.get("timeframe", ""),
                     "spread": chart.get("spread", ""),
                 })
-            summary["data"]["date_range"] = {
-                "from": s.get("dateFrom", ""),
-                "to": s.get("dateTo", ""),
+            # Fechas IS del setup
+            summary["data"]["in_sample"] = {
+                "dateFrom": s.get("dateFrom", ""),
+                "dateTo": s.get("dateTo", ""),
+                "testPrecision": s.get("testPrecision", ""),
+                "session": s.get("session", ""),
             }
+        
+        # Análisis de fechas IS vs OOS
+        summary["data"]["date_analysis"] = _analyze_dates(s.get("dateFrom", ""), s.get("dateTo", ""), ranges)
 
     # === Rankings / Filtros de calidad ===
     rankings = cfg.rankings
@@ -145,6 +158,123 @@ def summarize(cfg: CfxConfig) -> dict[str, Any]:
         }
 
     return summary
+
+
+def _analyze_dates(is_from: str, is_to: str, oos_ranges: list[dict]) -> dict[str, Any]:
+    """Analiza las fechas de IS y OOS para detectar problemas."""
+    from datetime import datetime
+    
+    analysis: dict[str, Any] = {
+        "in_sample": {"from": is_from, "to": is_to},
+        "out_of_sample": oos_ranges,
+        "issues": [],
+        "warnings": [],
+    }
+    
+    # Parsear fechas
+    try:
+        date_from = datetime.strptime(is_from, "%Y.%m.%d") if is_from else None
+        date_to = datetime.strptime(is_to, "%Y.%m.%d") if is_to else None
+    except ValueError:
+        analysis["issues"].append("Formato de fecha inválido (esperado: YYYY.MM.DD)")
+        return analysis
+    
+    if not date_from or not date_to:
+        analysis["issues"].append("Fechas IS faltantes")
+        return analysis
+    
+    # Duración total del período IS
+    total_days = (date_to - date_from).days
+    total_years = total_days / 365.25
+    analysis["is_total_days"] = total_days
+    analysis["is_total_years"] = round(total_years, 2)
+    
+    # Evaluar si el período IS es suficiente
+    if total_years < 3:
+        analysis["issues"].append(f"Período IS muy corto ({total_years:.1f} años). Mínimo recomendado: 3 años para robustez.")
+    elif total_years < 5:
+        analysis["warnings"].append(f"Período IS aceptable ({total_years:.1f} años), pero 5+ años es ideal.")
+    else:
+        analysis["warnings"].append(f"Período IS bueno ({total_years:.1f} años).")
+    
+    # Analizar rangos OOS
+    if not oos_ranges:
+        analysis["issues"].append("No hay rangos OOS definidos. Sin OOS no se puede validar robustez.")
+        return analysis
+    
+    # Parsear rangos OOS
+    parsed_ranges = []
+    for r in oos_ranges:
+        try:
+            rf = datetime.strptime(r.get("dateFrom", ""), "%Y.%m.%d")
+            rt = datetime.strptime(r.get("dateTo", ""), "%Y.%m.%d")
+            parsed_ranges.append({"from": rf, "to": rt, "type": r.get("type", ""), "days": (rt - rf).days})
+        except (ValueError, TypeError):
+            analysis["issues"].append(f"Rango OOS con fechas inválidas: {r}")
+    
+    # Calcular cobertura OOS
+    oos_days = sum(r["days"] for r in parsed_ranges)
+    oos_years = oos_days / 365.25
+    analysis["oos_total_days"] = oos_days
+    analysis["oos_total_years"] = round(oos_years, 2)
+    analysis["oos_coverage_pct"] = round((oos_days / total_days) * 100, 1) if total_days > 0 else 0
+    
+    # Evaluar ratio IS:OOS
+    ratio = oos_days / total_days if total_days > 0 else 0
+    analysis["is_oos_ratio"] = f"{ratio:.2f}:1"
+    
+    if ratio < 0.3:
+        analysis["issues"].append(f"Cobertura OOS muy baja ({ratio*100:.0f}% de IS). Recomendado: al menos 30-50%.")
+    elif ratio < 0.5:
+        analysis["warnings"].append(f"Cobertura OOS moderada ({ratio*100:.0f}% de IS). Ideal: 50%+.")
+    else:
+        analysis["warnings"].append(f"Buena cobertura OOS ({ratio*100:.0f}% de IS).")
+    
+    # Detectar si OOS = IS (mismo período, sin separación real)
+    if parsed_ranges:
+        oos_start = min(r["from"] for r in parsed_ranges)
+        oos_end = max(r["to"] for r in parsed_ranges)
+        
+        # Si OOS cubre prácticamente el mismo período que IS
+        if (abs((oos_start - date_from).days) <= 30 and 
+            abs((oos_end - date_to).days) <= 30 and
+            oos_days >= total_days * 0.9):
+            analysis["issues"].append("CRÍTICO: Los rangos OOS cubren prácticamente el MISMO período que el IS. No hay separación real entre IS y OOS — esto invalida la validación. Configure los rangos OOS como subconjuntos del IS o use walk-forward.")
+            # Limpiar warnings engañosos
+            analysis["warnings"] = [w for w in analysis["warnings"] if "cobertura" not in w.lower() and "buena cantidad" not in w.lower()]
+            analysis["warnings"].append("Configure los rangos OOS para que sean subconjuntos del IS (ej. 30-50% del período), no el total.")
+    
+    # Detectar overlaps entre OOS y IS
+    for r in parsed_ranges:
+        if r["from"] <= date_to and r["to"] >= date_from:
+            # Solo reportar si no ya se detectó el caso OOS=IS
+            if not any("CRÍTICO" in i for i in analysis["issues"]):
+                analysis["issues"].append(f"Rango OOS {r['from'].strftime('%Y.%m.%d')} - {r['to'].strftime('%Y.%m.%d')} se solapa con IS.")
+    
+    # Detectar gaps entre rangos OOS
+    if len(parsed_ranges) > 1:
+        sorted_ranges = sorted(parsed_ranges, key=lambda x: x["from"])
+        for i in range(len(sorted_ranges) - 1):
+            gap = (sorted_ranges[i+1]["from"] - sorted_ranges[i]["to"]).days
+            if gap > 30:
+                analysis["warnings"].append(f"Gap de {gap} días entre rangos OOS ({sorted_ranges[i]['to'].strftime('%Y.%m.%d')} -> {sorted_ranges[i+1]['from'].strftime('%Y.%m.%d')}).")
+    
+    # Evaluar períodos OOS individuales
+    for r in parsed_ranges:
+        r_years = r["days"] / 365.25
+        if r_years < 0.25:
+            analysis["warnings"].append(f"Rango OOS muy corto ({r['days']} días). Recomendado: al menos 3 meses por rango.")
+    
+    # Recomendación de Walk-Forward basada en cantidad de rangos
+    num_ranges = len(parsed_ranges)
+    analysis["num_oos_ranges"] = num_ranges
+    
+    if num_ranges == 1:
+        analysis["warnings"].append("Solo 1 rango OOS. Walk-forward con múltiples rangos da más confianza.")
+    elif num_ranges >= 3:
+        analysis["warnings"].append(f"Buena cantidad de rangos OOS ({num_ranges}) para walk-forward.")
+    
+    return analysis
 
 
 def _extract_indicators(active_blocks: list[dict]) -> list[dict]:
