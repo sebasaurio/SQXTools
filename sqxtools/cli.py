@@ -9,7 +9,7 @@ from .parser import parse_cfx
 from .serializer import save_output, to_json, to_markdown
 from .analyzer import summarize, active_blocks_only, blocks_by_category
 from .compare import compare_configs
-from .ai_analyzer import analyze as ai_analyze
+from .ai_analyzer import get_system_prompt
 
 
 def cmd_parse(args):
@@ -124,7 +124,7 @@ def cmd_list_categories(args):
 
 
 def cmd_ai_analyze(args):
-    """Analiza con IA — envía resumen a LLM para análisis completo."""
+    """Prepara el .cfx para análisis con IA (agente lo analiza directamente)."""
     inp = Path(args.input)
     if not inp.exists():
         print(f"ERROR: no existe {inp}", file=sys.stderr)
@@ -133,19 +133,21 @@ def cmd_ai_analyze(args):
     cfg = parse_cfx(inp)
     summary = summarize(cfg)
 
-    print(f"Analizando {inp.name} con {args.provider}...")
+    out = Path(args.output) if args.output else inp.with_suffix(".ai_input.json")
+    out.write_text(json.dumps(summary, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    
+    print(f"✓ Resumen generado → {out}")
     print(f"  Bloques activos: {summary['blocks_summary']['active']}/{summary['blocks_summary']['total']}")
-
-    result = ai_analyze(
-        summary,
-        provider=args.provider,
-        api_key=args.api_key,
-        model=args.model,
-    )
-
-    out = Path(args.output) if args.output else inp.with_suffix(".ai_analysis.md")
-    out.write_text(result, encoding="utf-8")
-    print(f"✓ Análisis IA → {out}")
+    print(f"  Categorías: {list(summary.get('categories', {}).keys())}")
+    print()
+    print("PROMPT DE SISTEMA PARA EL ANÁLISIS:")
+    print("=" * 50)
+    from .ai_analyzer import get_system_prompt
+    print(get_system_prompt())
+    print("=" * 50)
+    print()
+    print(f"El resumen está en: {out}")
+    print("Ahora el agente puede analizar este resumen directamente.")
     return 0
 
 
@@ -262,12 +264,9 @@ def main(argv: list[str] | None = None) -> int:
     p_list.set_defaults(func=cmd_list_categories)
 
     # ai-analyze
-    p_ai = sub.add_parser("ai-analyze", help="Analiza con IA (LLM) para mejoras")
+    p_ai = sub.add_parser("ai-analyze", help="Prepara .cfx para análisis con IA")
     p_ai.add_argument("input", help="Archivo .cfx")
-    p_ai.add_argument("-o", "--output", help="Salida Markdown")
-    p_ai.add_argument("--provider", choices=["openai", "anthropic", "mistral"], default="anthropic", help="Proveedor LLM")
-    p_ai.add_argument("--api-key", help="API key (si no está en env var)")
-    p_ai.add_argument("--model", help="Modelo específico")
+    p_ai.add_argument("-o", "--output", help="Salida JSON con resumen")
     p_ai.set_defaults(func=cmd_ai_analyze)
 
     args = ap.parse_args(argv)
