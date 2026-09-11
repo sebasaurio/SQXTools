@@ -13,6 +13,7 @@ from .ai_analyzer import get_system_prompt
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
 from .date_optimizer import optimize_date_ranges
+from .sqb_builder import build_recommended_sqb, get_block_definition, dump_catalog, list_blocks
 import pandas as pd
 
 
@@ -485,6 +486,86 @@ def _generate_full_proposal(edge: dict, dates: dict, builder: dict | None) -> di
     return proposal
 
 
+
+def cmd_build_sqb(args):
+    """Genera un .sqb recomendado a partir del catálogo de bloques origen."""
+    template = Path(args.template)
+    if not template.exists():
+        print(f"ERROR: no existe {template}", file=sys.stderr)
+        return 1
+
+    # Parsear listas separadas por coma
+    def parse_list(s):
+        if not s:
+            return []
+        return [x.strip() for x in s.split(",") if x.strip()]
+
+    signals = parse_list(args.signals)
+    indicators = parse_list(args.indicators)
+    stops = parse_list(args.stops)
+    ot = parse_list(args.order_types)
+    et = parse_list(args.exit_types)
+
+    report = build_recommended_sqb(
+        template_path=template,
+        output_path=args.output or "output/recommended.sqb",
+        use_signals=signals,
+        use_indicators=indicators,
+        use_stops=stops,
+        use_order_types=ot,
+        use_exit_types=et,
+    )
+
+    print(f"✓ .sqb generado → {report['output']}")
+    print()
+    print(f"  Activados {sum(len(v) for v in report['activated'].values())} bloques:")
+    for cat, blocks in report["activated"].items():
+        print(f"    {cat} ({len(blocks)}): {', '.join(blocks)}")
+
+    nf = {k: v for k, v in report["not_found"].items() if v}
+    if nf:
+        print()
+        print("  ⚠ NO ENCONTRADOS en el catálogo:")
+        for cat, keys in nf.items():
+            if keys:
+                print(f"    {cat}: {', '.join(keys)}")
+
+    print()
+    print(f"  OrderTypes activos: {[o['key'] for o in report['order_types']]}")
+    print(f"  ExitTypes activos: {[e['key'] for e in report['exit_types']]}")
+    return 0
+
+
+def cmd_catalog(args):
+    """Lista el catálogo de bloques disponibles con sus parámetros."""
+    template = Path(args.template)
+    if not template.exists():
+        print(f"ERROR: no existe {template}", file=sys.stderr)
+        return 1
+
+    if args.block:
+        d = get_block_definition(template, args.block)
+        if not d:
+            print(f"ERROR: bloque '{args.block}' no existe en el catálogo", file=sys.stderr)
+            return 1
+        print(f"Bloque: {d['key']}")
+        print(f"  Categoría: {d['category']}")
+        print(f"  Parámetros:")
+        for p in d["params"]:
+            extra = f" values={p['values']}" if p.get("values") else ""
+            print(f"    {p['key']} ({p['type']}){extra}")
+        if d.get("example_defaults"):
+            print(f"  Valores por defecto: {d['example_defaults']}")
+        return 0
+
+    cat = dump_catalog(template, category=args.category)
+    print(f"Catálogo: {len(cat)} bloques" + (f" en categoría '{args.category}'" if args.category else ""))
+    for b in cat:
+        params = ", ".join(p["key"] for p in b["params"])
+        print(f"  [{b['category']}] {b['key']}: {params}")
+    return 0
+
+
 def cmd_cache(args):
     """Gestiona cache de datos."""
     if args.list:
@@ -571,6 +652,25 @@ def main(argv: list[str] | None = None) -> int:
     p_full.add_argument("--cfx", help="Archivo .cfx actual para comparar (opcional)")
     p_full.add_argument("-o", "--output", help="Salida JSON")
     p_full.set_defaults(func=cmd_full_analysis)
+
+
+    # build-sqb
+    p_build = sub.add_parser("build-sqb", help="Genera .sqb recomendado desde catálogo")
+    p_build.add_argument("--template", required=True, help=".sqb origen con catálogo completo")
+    p_build.add_argument("-o", "--output", help="Salida .sqb")
+    p_build.add_argument("--signals", help="Señales separadas por coma")
+    p_build.add_argument("--indicators", help="Indicadores separados por coma")
+    p_build.add_argument("--stops", help="Stop/Limit blocks separados por coma")
+    p_build.add_argument("--order-types", help="OrderTypes separados por coma")
+    p_build.add_argument("--exit-types", help="ExitTypes separados por coma")
+    p_build.set_defaults(func=cmd_build_sqb)
+
+    # catalog
+    p_cat = sub.add_parser("catalog", help="Lista catálogo de bloques y sus parámetros")
+    p_cat.add_argument("--template", required=True, help=".sqb origen con catálogo completo")
+    p_cat.add_argument("--category", choices=["signals", "indicators", "stopLimitBlocks"], help="Filtrar por categoría")
+    p_cat.add_argument("--block", help="Detalle de un bloque específico")
+    p_cat.set_defaults(func=cmd_catalog)
 
     # cache
     p_cache = sub.add_parser("cache", help="Gestiona cache de datos")

@@ -155,7 +155,12 @@ def _find_best_hours(df: pd.DataFrame) -> list[dict]:
 
 
 def _propose_indicators(df: pd.DataFrame, analysis: dict) -> dict:
-    """Propone indicadores organizados por categoría (signals, indicators, stopLimitBlocks)."""
+    """Propone indicadores organizados por categoría (signals, indicators, stopLimitBlocks).
+
+    IMPORTANTE: los nombres deben coincidir EXACTAMENTE con los bloques del catálogo
+    de StrategyQuant (ver sqb_builder.dump_catalog), porque SQ valida la firma de
+    parámetros de cada bloque. Nombres inventados hacen que SQ no marque el bloque.
+    """
     proposals = {
         "signals": [],
         "indicators": [],
@@ -186,7 +191,7 @@ def _propose_indicators(df: pd.DataFrame, analysis: dict) -> dict:
     
     proposals["signals"].extend([
         {"name": "ATRRising", "reason": "Volatilidad creciente = oportunidades de shorts"},
-        {"name": "BollingerBandsOutside", "reason": "Precio fuera de banda bajista = continuación"},
+        {"name": "BBUpperFalling", "reason": "Banda superior de BB cayendo = continuación bajista"},
     ])
     
     # === INDICATORS (confirmación) ===
@@ -199,10 +204,10 @@ def _propose_indicators(df: pd.DataFrame, analysis: dict) -> dict:
     
     # === STOP/LIMIT BLOCKS (niveles de stop/target) ===
     proposals["stopLimitBlocks"].extend([
-        {"name": "Stop/Limit Price Levels.RSI", "reason": "Stop en niveles de RSI (sobrecompra/sobreventa)"},
-        {"name": "Stop/Limit Price Levels.ATR", "reason": "Stop dinámico basado en ATR"},
-        {"name": "Stop/Limit Price Levels.SuperTrend", "reason": "Stop en línea SuperTrend"},
+        {"name": "Stop/Limit Price Levels.BollingerBands", "reason": "Stop en bandas de Bollinger"},
         {"name": "Stop/Limit Price Ranges.ATR", "reason": "Rango de stop basado en ATR"},
+        {"name": "Stop/Limit Price Levels.SuperTrend", "reason": "Stop en línea SuperTrend"},
+        {"name": "Stop/Limit Price Levels.SMA", "reason": "Stop en media móvil simple"},
     ])
     
     return proposals
