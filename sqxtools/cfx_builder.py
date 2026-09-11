@@ -233,7 +233,14 @@ def _set_ranking_condition(root: ET.Element, column: str, value: str | None,
 
 def _add_ranking_condition(root: ET.Element, column: str, comparator: str,
                            value: str, changes: list) -> bool:
-    """Agrega una condición de ranking nueva (activa) con la estructura estándar."""
+    """Activa una condición de ranking para `column`.
+
+    IMPORTANTE: StrategyQuant re-instancia las condiciones construidas "a mano"
+    desde la definición de la columna y **reinicia el valor al default**
+    (p. ej. WinLossRatio → 1.2). Por eso NO se crean condiciones nuevas:
+    se REUTILIZA una condición inactiva existente (cambiando su columna, comparador
+    y valor), lo que preserva la estructura completa de atributos que SQ espera.
+    """
     sec = _rankings_section(root)
     if sec is None:
         changes.append({"setting": f"Rankings.{column}", "status": "section_not_found"})
@@ -254,26 +261,42 @@ def _add_ranking_condition(root: ET.Element, column: str, comparator: str,
             changes.append({"setting": f"Rankings.{column}", "status": "already_exists"})
             return True
 
-    cond = ET.SubElement(conds, "Condition")
-    cond.set("use", "true")
+    # Buscar una condición inactiva con lado derecho numérico para reutilizar
+    donor = None
+    for cond in _iter_ranking_conditions(root):
+        if cond.get("use", "false") == "true":
+            continue
+        if _condition_numeric_value(cond) is None:
+            continue
+        donor = cond
+        break
 
-    left = ET.SubElement(cond, "Left-Side")
-    left.set("valueType", "column")
-    colv = ET.SubElement(left, "Column-Value")
-    colv.set("column", column)
-    colv.set("format", "Decimal2")
-    colv.set("resultType", "main")
-    colv.set("class", column)
+    if donor is None:
+        changes.append({"setting": f"Rankings.{column}",
+                        "status": "no_free_condition_slot"})
+        return False
 
-    comp = ET.SubElement(cond, "Comparator")
-    comp.set("value", comparator)  # ET escapa > y < automáticamente al serializar
+    # Repurposear el donante: activar, cambiar columna, comparador y valor
+    prev_column = _condition_column(donor)
+    donor.set("use", "true")
 
-    right = ET.SubElement(cond, "Right-Side")
-    right.set("valueType", "numeric")
-    num = ET.SubElement(right, "Numeric-Value")
-    num.set("value", value)
+    for cv in donor.iter("Column-Value"):
+        if cv.get("column"):
+            cv.set("column", column)
+            if cv.get("class"):
+                cv.set("class", column)
+            break
+
+    for comp in donor.iter("Comparator"):
+        comp.set("value", comparator)
+        break
+
+    for nv in donor.iter("Numeric-Value"):
+        nv.set("value", value)
+        break
 
     changes.append({"setting": f"Rankings.{column}", "status": "added",
+                    "reused_condition": prev_column,
                     "comparator": comparator, "value": value})
     return True
 

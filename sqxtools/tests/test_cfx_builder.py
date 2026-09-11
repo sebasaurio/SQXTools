@@ -125,6 +125,42 @@ class TestApplyBuilderProfile:
                 found = el.get("probability")
         assert found == "20"
 
+    def test_new_ranking_condition_reuses_inactive_slot(self, cfx_file: Path, tmp_path: Path):
+        """Crítico: una condición nueva debe REUTILIZAR una inactiva, no crearse.
+
+        StrategyQuant re-instancia las condiciones creadas a mano y reinicia su
+        valor al default (WinLossRatio → 1.2). Reutilizar un slot preserva la
+        estructura completa de atributos que SQ espera.
+        """
+        original = parse_cfx(cfx_file)
+        n_before = len(original.rankings["conditions"])
+
+        out = tmp_path / "reuse.cfx"
+        report = apply_builder_profile(cfx_file, out, {
+            "rankings": {"win_loss_ratio_min": 1.5}
+        })
+
+        # Debe reportarse como reutilización, no como creación desde cero
+        entry = next(c for c in report["changes"] if c["setting"].endswith("WinLossRatio"))
+        assert entry["status"] == "added"
+        assert "reused_condition" in entry
+
+        after = parse_cfx(out)
+        # El total de condiciones NO debe crecer
+        assert len(after.rankings["conditions"]) == n_before
+
+        # Y la condición debe tener la estructura completa de atributos
+        target = None
+        for cond in after.rankings["conditions"]:
+            col = cond.get("left_side", {}).get("column", {})
+            if col.get("column") == "WinLossRatio":
+                target = col
+                break
+        assert target is not None
+        assert target.get("sampleType") == "127"
+        assert target.get("class") == "WinLossRatio"
+        assert target.get("confidenceLevel") == "50"
+
     def test_unknown_setting_is_reported_not_crashed(self, cfx_file: Path, tmp_path: Path):
         """Un nombre de parámetro inexistente debe reportarse, no romper."""
         out = tmp_path / "unk.cfx"

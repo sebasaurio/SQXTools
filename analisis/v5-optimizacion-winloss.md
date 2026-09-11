@@ -115,6 +115,33 @@ Hoy: `Ret/DD ≥ 1`, `Trades ≥ 100`, `PF ≥ 1.2`, `DD ≤ 12%`
 el breakeven baja a ~55% y el genético empieza a seleccionar por win rate.
 Sin acotar el RRR, ningún otro cambio mueve la aguja de verdad.
 
+## Validación: round-trip por StrategyQuant
+
+Se cargó `output/v6_winrate.cfx` en StrategyQuant y se guardó como `Build strategies 3.cfx`.
+Comparación XML completa (18.029 elementos):
+
+**Sobrevivieron 19/19 ajustes**: RRR (60/120), PT ATR (1.2–2.0), SL ATR (1.5–2.5),
+`LimitSLPTRRR`, `minConditions`/`maxConditions` (3/3), `LimitTimeRange` + horario
+(43200–54000), `MaxTradesPerDay` (3), `DontTradeOnWeekends`, `PickerMaxOpenPositionsShort` (2),
+`ExitOnFriday`, fitness `SharpeRatio` y `ProfitFactor ≥ 1.45`. Los 22 bloques intactos.
+
+**2 valores revertidos:**
+
+1. **`WinLossRatio ≥ 1.5` → 1.2.** Causa: la condición se había *creado desde cero* con
+   atributos mínimos, y StrategyQuant la re-instancia desde la definición de la columna,
+   reiniciando el valor al default. **Corregido**: ahora se *reutiliza una condición
+   inactiva* existente (hay 9 slots libres), preservando la estructura completa de
+   atributos. Las condiciones *existentes* que solo se modifican de valor nunca se
+   resetean — solo pasaba con las creadas a mano.
+
+2. **`ExitAfterBars` probability 20 → 50.** Efecto colateral del mismo patrón, pero
+   StrategyQuant lo administra internamente para ese bloque (`type="int"`); el resto de
+   los exit types (`type="formula"`) conservaron su valor. **Acción**: ajustarlo a mano
+   en la UI de StrategyQuant (1 clic).
+
+Cambios estructurales que hizo SQ por su cuenta (normales, no son problema):
+`Symbols`/`InstrumentInfo` → `AllBrokers`, y reorganización de `Databanks`.
+
 ## Cómo medirlo
 
 Después del próximo build, correr en StrategyQuant el ranking con la columna
