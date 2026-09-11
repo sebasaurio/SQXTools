@@ -40,6 +40,10 @@ python -m sqxtools.cli list-categories archivo.cfx
 
 # Comparar dos .cfx (qué bloques cambian, qué SLPT difiere, etc.)
 python -m sqxtools.cli compare build1.cfx build2.cfx -o diff.json
+
+# ✨ Analizar con IA (LLM) — propone mejoras para tu builder
+python -m sqxtools.cli ai-analyze archivo.cfx --provider anthropic -o mejoras.md
+python -m sqxtools.cli ai-analyze archivo.cfx --provider openai --model gpt-4o
 ```
 
 ## Salida JSON — Estructura

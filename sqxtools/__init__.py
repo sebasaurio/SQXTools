@@ -5,6 +5,7 @@ from .models import CfxConfig, CfxType, Param, Condition, Block, Setup, Range
 from .analyzer import summarize, active_blocks_only, blocks_by_category
 from .compare import compare_configs
 from .serializer import to_json, to_markdown, to_yaml, save_output
+from .ai_analyzer import analyze as ai_analyze
 
 __all__ = [
     "parse_cfx",
@@ -23,4 +24,5 @@ __all__ = [
     "to_markdown",
     "to_yaml",
     "save_output",
+    "ai_analyze",
 ]
