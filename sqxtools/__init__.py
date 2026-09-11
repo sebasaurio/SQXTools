@@ -6,6 +6,8 @@ from .analyzer import summarize, active_blocks_only, blocks_by_category
 from .compare import compare_configs
 from .serializer import to_json, to_markdown, to_yaml, save_output
 from .ai_analyzer import get_system_prompt, prepare_for_agent
+from .data_downloader import download_dukascopy, download_yfinance, load_data
+from .edge_analyzer import analyze_market
 
 __all__ = [
     "parse_cfx",
@@ -25,4 +27,8 @@ __all__ = [
     "to_yaml",
     "save_output",
     "ai_analyze",
+    "download_dukascopy",
+    "download_yfinance",
+    "load_data",
+    "analyze_market",
 ]

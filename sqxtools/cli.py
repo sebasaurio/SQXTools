@@ -10,6 +10,8 @@ from .serializer import save_output, to_json, to_markdown
 from .analyzer import summarize, active_blocks_only, blocks_by_category
 from .compare import compare_configs
 from .ai_analyzer import get_system_prompt
+from .data_downloader import download_dukascopy, download_yfinance, load_data
+from .edge_analyzer import analyze_market
 
 
 def cmd_parse(args):
@@ -120,6 +122,61 @@ def cmd_list_categories(args):
     print(f"\nCategorías en {inp.name}:")
     for cat, counts in sorted(categories.items(), key=lambda x: -x[1]["total"]):
         print(f"  {cat}: {counts['total']} total, {counts['active']} activos")
+    return 0
+
+
+def cmd_edge_finder(args):
+    """Analiza mercado y propone builder óptimo."""
+    print(f"Analizando {args.symbol} ({args.timeframe}, {args.period})...")
+    print(f"  Fuente: {args.source}")
+    
+    # Descargar datos
+    try:
+        if args.source == "yfinance":
+            data_path = download_yfinance(
+                symbol=args.symbol,
+                timeframe=args.timeframe,
+                period=args.period,
+            )
+        elif args.source == "dukascopy":
+            data_path = download_dukascopy(
+                symbol=args.symbol,
+                timeframe=args.timeframe.replace("m", "").replace("h", "H"),
+                output_dir="./data",
+            )
+        else:
+            print(f"ERROR: Fuente no soportada: {args.source}", file=sys.stderr)
+            return 1
+    except ImportError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR descargando datos: {e}", file=sys.stderr)
+        return 1
+    
+    # Cargar y analizar
+    df = load_data(data_path)
+    analysis = analyze_market(df, symbol=args.symbol, timeframe=args.timeframe)
+    
+    # Guardar resultado
+    out = Path(args.output) if args.output else Path(f"edge_finder_{args.symbol}_{args.timeframe}.json")
+    out.write_text(json.dumps(analysis, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    
+    # Mostrar resumen
+    print(f"\n✓ Análisis de mercado completo → {out}")
+    print(f"  Barras analizadas: {analysis['data_info']['total_bars']}")
+    print(f"  Volatilidad promedio: {analysis['volatility']['avg_range_pct']:.3f}%")
+    
+    if analysis.get("sessions", {}).get("best_trading_hours"):
+        print(f"  Mejores horas para shorts: {[h['hour'] for h in analysis['sessions']['best_trading_hours']]}")
+    
+    if analysis.get("builder_proposal", {}).get("signals"):
+        print(f"  Señales propuestas: {analysis['builder_proposal']['signals']}")
+    
+    if analysis.get("builder_proposal", {}).get("risk"):
+        risk = analysis["builder_proposal"]["risk"]
+        print(f"  Risk: ${risk['fixed_amount']}/trade, {risk['drawdown_pct']}% drawdown")
+    
     return 0
 
 
@@ -268,6 +325,15 @@ def main(argv: list[str] | None = None) -> int:
     p_ai.add_argument("input", help="Archivo .cfx")
     p_ai.add_argument("-o", "--output", help="Salida JSON con resumen")
     p_ai.set_defaults(func=cmd_ai_analyze)
+
+    # edge-finder
+    p_edge = sub.add_parser("edge-finder", help="Analiza mercado y propone builder óptimo")
+    p_edge.add_argument("--symbol", default="NQ=F", help="Símbolo (NQ=F, EURUSD, etc.)")
+    p_edge.add_argument("--timeframe", default="60m", help="Temporalidad (1m, 5m, 15m, 60m, 1h)")
+    p_edge.add_argument("--period", default="2y", help="Período de datos (1y, 2y, 5y)")
+    p_edge.add_argument("--source", choices=["dukascopy", "yfinance"], default="yfinance", help="Fuente de datos")
+    p_edge.add_argument("-o", "--output", help="Salida JSON")
+    p_edge.set_defaults(func=cmd_edge_finder)
 
     args = ap.parse_args(argv)
     if not args.command:
