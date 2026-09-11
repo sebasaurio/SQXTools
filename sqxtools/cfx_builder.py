@@ -19,10 +19,14 @@ Uso:
     apply_builder_profile("v5.cfx", "v6.cfx", "perfil.yaml")
 """
 
+import difflib
 import json
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+
+# Categorías de bloques dentro de Blocks/BuildingBlocks
+BLOCK_CATEGORIES = ("signals", "indicators", "stopLimitBlocks")
 
 
 def _clean(tag: str) -> str:
@@ -321,6 +325,72 @@ def _set_exit_probability(root: ET.Element, block_key: str, value: str,
     return False
 
 
+
+def _iter_cfx_blocks(root: ET.Element, category: str | None = None):
+    """Itera los <Block> de Blocks/BuildingBlocks (o de otra categoría del .cfx)."""
+    blocks = _find_section(root, "BuildingBlocks")
+    if blocks is None:
+        return
+    for el in blocks:
+        if _clean(el.tag) != "Block":
+            continue
+        if category is not None and el.get("category") != category:
+            continue
+        yield el
+
+
+def _cfx_block_keys(root: ET.Element, category: str) -> list[str]:
+    """Keys válidas de una categoría dentro del .cfx."""
+    return [el.get("key", "") for el in _iter_cfx_blocks(root, category)]
+
+
+def _set_block_use(root: ET.Element, category: str, keys, use: bool,
+                   changes: list, strict: bool = True) -> None:
+    """Marca use=true/false en los bloques indicados de una categoría del .cfx.
+
+    IMPORTANTE: activar un bloque en el .cfx es lo que hace que el builder lo USE
+    durante un build. Modificar solo el .sqb (catálogo global) no basta.
+    """
+    keys = set(keys or [])
+    if not keys:
+        return
+
+    available = set(_cfx_block_keys(root, category))
+    missing = sorted(keys - available)
+    if missing:
+        for key in missing:
+            sug = difflib.get_close_matches(key, sorted(available), n=1, cutoff=0.6)
+            changes.append({
+                "setting": f"blocks.{category}.{key}",
+                "status": "block_not_found",
+                "suggestion": sug[0] if sug else None,
+            })
+        if strict:
+            detail = "\n".join(
+                f"  - [{category}] '{k}'"
+                + (f"  → ¿quisiste decir '{difflib.get_close_matches(k, sorted(available), n=1, cutoff=0.6)[0]}'?"
+                   if difflib.get_close_matches(k, sorted(available), n=1, cutoff=0.6) else "")
+                for k in missing
+            )
+            raise ValueError("Bloques inválidos en el .cfx:\n" + detail)
+
+    done = 0
+    for el in _iter_cfx_blocks(root, category):
+        key = el.get("key", "")
+        if key not in keys:
+            continue
+        new_use = "true" if use else "false"
+        old = el.get("use", "false")
+        if old != new_use:
+            el.set("use", new_use)
+            changes.append({"setting": f"blocks.{key}", "status": "changed",
+                            "from": old, "to": new_use})
+            done += 1
+        else:
+            changes.append({"setting": f"blocks.{key}", "status": "unchanged",
+                            "value": new_use})
+
+
 # === Perfiles de builder (YAML/JSON) ===
 
 def load_builder_profile(path: str | Path) -> dict:
@@ -359,8 +429,13 @@ def apply_builder_profile(
     template_path: str | Path,
     output_path: str | Path,
     profile: dict | str | Path,
+    strict: bool = True,
 ) -> dict:
     """Aplica un perfil de builder sobre un .cfx y escribe el resultado.
+
+    Args:
+        strict: si True, aborta con ValueError si el perfil pide un bloque que no
+            existe en el catálogo del .cfx (con sugerencia de corrección).
 
     Returns:
         {"output": str, "applied": int, "changes": [...], "warnings": [...]}
@@ -465,6 +540,26 @@ def apply_builder_profile(
         if key in ex:
             _set_exit_probability(root, block, _as_num(ex[key]), changes)
 
+    # --- Bloques del builder (activar/desactivar señales, indicadores, stops) ---
+    bl = profile.get("blocks") or {}
+    if isinstance(bl, dict):
+        for cat in BLOCK_CATEGORIES:
+            add_key = f"add_{cat}"
+            if add_key in bl:
+                _set_block_use(root, cat, bl[add_key], True, changes, strict=strict)
+            rem_key = f"remove_{cat}"
+            if rem_key in bl:
+                _set_block_use(root, cat, bl[rem_key], False, changes, strict=strict)
+        if "set_signals" in bl:
+            # Lista exacta: activa las indicadas y desactiva el resto
+            wanted = set(bl["set_signals"])
+            _set_block_use(root, "signals", wanted, True, changes, strict=strict)
+            for el in _iter_cfx_blocks(root, "signals"):
+                if el.get("key") not in wanted and el.get("use") == "true":
+                    el.set("use", "false")
+                    changes.append({"setting": f"blocks.{el.get('key')}",
+                                    "status": "changed", "from": "true", "to": "false"})
+
     # Detectar claves desconocidas en el perfil (se ignorarían en silencio)
     known = {
         "risk_reward": {"limit_slpt_rrr", "rrr_from", "rrr_to",
@@ -486,18 +581,32 @@ def apply_builder_profile(
                   "profit_target_probability", "stop_loss_probability",
                   "trailing_stop_probability"},
     }
+    # Claves válidas dentro de la sección 'blocks'
+    known_block_keys = {
+        f"{pre}_{cat}"
+        for pre in ("add", "remove")
+        for cat in BLOCK_CATEGORIES
+    } | {"set_signals"}
     meta_keys = {"name", "description", "symbol", "timeframe"}
     unknown: list = []
     for section, values in profile.items():
         if section in meta_keys:
+            continue
+        if section == "blocks":
+            # Validado dentro de _set_block_use (contra el catálogo del .cfx)
+            if isinstance(values, dict):
+                for key in values:
+                    if key not in known_block_keys:
+                        unknown.append(f"blocks.{key}")
             continue
         if section not in known:
             unknown.append(f"sección desconocida: '{section}'")
             continue
         if not isinstance(values, dict):
             continue
+        valid_keys = known_block_keys if section == "blocks" else known[section]
         for key in values:
-            if key not in known[section]:
+            if key not in valid_keys:
                 unknown.append(f"{section}.{key}")
 
     out = write_cfx_xml(root, output_path)

@@ -1,0 +1,58 @@
+# Perfil de BUILDER — variante "ROBUSTEZ ESTADÍSTICA"
+#
+# Objetivo: estrategias con MUCHOS trades, para que PF / WLR / Sharpe sean métricas
+# confiables y no artefactos de pocas operaciones.
+#
+# Base: output/v6_winrate.cfx  (conserva el RRR acotado, el win rate y los filtros)
+#
+# Uso:
+#   python -m sqxtools.cli build-cfx --template output/v6_winrate.cfx \
+#     --profile perfiles/builder-nas100-robustez.yaml -o output/v8_robustez.cfx
+#
+# NOTA: la sección `blocks` activa señales ADICIONALES directamente en el .cfx.
+# Eso es lo que hace que el builder las use en el build. Modificar solo el .sqb
+# (catálogo global) NO basta: el .cfx lleva su propia selección de bloques.
+
+name: nas100-robustez
+description: Muchos trades con calidad intacta, para métricas estadísticamente sólidas
+
+# ── Bloques: ampliar el repertorio de señales ─────────────────────────────────
+# 8 señales nuevas de FAMILIAS DISTINTAS (oscilador, momentum, tendencia,
+# reversión) para que el builder tenga más combinaciones posibles y pueda
+# encontrar reglas que disparen seguido sin perder poder predictivo.
+#
+# Todas validadas contra el catálogo real del .cfx.
+blocks:
+  add_signals:
+    - StochSlowDCrossDown      # oscilador (cruce de la línea D)
+    - CCIChangesDown           # momentum (CCI girando a la baja)
+    - MomFalling               # momentum puro
+    - ADXRising                # fuerza de tendencia creciente
+    - PSARBarLower             # Parabolic SAR en modo bajista
+    - ROCCrossesBelowLevel     # tasa de cambio cruzando a la baja
+    - VortexDowntrend          # indicador de tendencia (familia distinta)
+    - MACDMainCrossBelowZero   # cruce de MACD bajo cero (más fuerte que "falling")
+
+# ── Entradas: el mayor limitante de frecuencia ────────────────────────────────
+entries:
+  min_conditions: 2         # antes: 3
+  max_conditions: 3         # permite reglas de 2 o 3 condiciones
+
+# ── Ventana y topes: más oportunidades ────────────────────────────────────────
+trading:
+  limit_time_range: true
+  signal_time_from: 28800   # 08:00 UTC (Londres + NY = 56.3% del día)
+  signal_time_to: 72000     # 20:00 UTC
+  max_open_positions_short: 4   # antes: 2
+  max_trades_per_day: 6         # antes: 3
+
+# ── Rankings: el piso de trades ES la palanca de robustez ─────────────────────
+# Con 250+ trades por estrategia, ProfitFactor / WinLossRatio / Sharpe dejan de
+# ser ruido muestral. Se MANTIENEN los filtros de calidad: bajarlos daría muchos
+# trades de mala calidad, que es lo contrario de "métricas confiables".
+rankings:
+  number_of_trades_min: 250   # antes: 100
+
+# Sin cambios respecto a v6_winrate:
+#   fitness SharpeRatio · ProfitFactor >= 1.45 · WinLossRatio >= 1.5
+#   DrawdownPct <= 12 · LimitSLPTRRR 60-120 · PT ATR 1.2-2.0

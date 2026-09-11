@@ -195,6 +195,62 @@ class TestApplyBuilderProfile:
         assert any(c["status"] == "unchanged" for c in report["changes"])
 
 
+class TestBlockActivation:
+    """Activar bloques en el .cfx es lo que hace que el builder los USE."""
+
+    def test_add_signals(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "blocks.cfx"
+        report = apply_builder_profile(cfx_file, out, {
+            "blocks": {"add_signals": ["StochSlowDCrossDown", "VortexDowntrend"]}
+        })
+        assert report["warnings"] == []
+        cfg = parse_cfx(out)
+        active = {b["key"] for b in cfg.blocks["building_blocks"]
+                  if b.get("use") and b.get("category") == "signals"}
+        assert "StochSlowDCrossDown" in active
+        assert "VortexDowntrend" in active
+
+    def test_unknown_block_aborts_with_suggestion(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "nope.cfx"
+        with pytest.raises(ValueError, match="StochasticCrossDown"):
+            apply_builder_profile(cfx_file, out, {
+                "blocks": {"add_signals": ["StochasticCrossDown"]}  # nombre inexistente
+            })
+        assert not out.exists()
+
+    def test_block_activation_preserves_other_blocks(self, cfx_file: Path, tmp_path: Path):
+        original = parse_cfx(cfx_file)
+        n_before = sum(1 for b in original.blocks["building_blocks"] if b.get("use"))
+
+        out = tmp_path / "pres.cfx"
+        apply_builder_profile(cfx_file, out, {
+            "blocks": {"add_signals": ["MomFalling"]}
+        })
+        after = parse_cfx(out)
+        n_after = sum(1 for b in after.blocks["building_blocks"] if b.get("use"))
+        assert n_after == n_before + 1
+        # El total de bloques del catálogo no cambia
+        assert len(after.blocks["building_blocks"]) == len(original.blocks["building_blocks"])
+
+    def test_remove_blocks(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "rem.cfx"
+        report = apply_builder_profile(cfx_file, out, {
+            "blocks": {"remove_indicators": ["Indicators.RSI"]}
+        })
+        assert report["warnings"] == []
+        cfg = parse_cfx(out)
+        rsi = next(b for b in cfg.blocks["building_blocks"]
+                   if b["key"] == "Indicators.RSI")
+        assert rsi["use"] is False
+
+    def test_unknown_section_key_reported(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "unk.cfx"
+        report = apply_builder_profile(cfx_file, out, {
+            "blocks": {"add_señales": ["RSIFalling"]}  # clave inválida
+        })
+        assert any("add_señales" in w for w in report["warnings"])
+
+
 class TestBuilderProfiles:
     def test_load_yaml_profile(self, tmp_path: Path):
         p = tmp_path / "perfil.yaml"

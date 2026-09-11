@@ -1,0 +1,68 @@
+# Perfil de BLOQUES (.sqb) — NAS100 robustez estadística
+#
+# Acompaña a perfiles/builder-nas100-robustez.yaml. El .sqb es el catálogo global
+# de bloques; el .cfx lleva su propia selección. Se generan los dos para que
+# coincidan y el build tome exactamente este repertorio.
+#
+# Uso:
+#   python -m sqxtools.cli build-sqb --template BlockSettings.sqb \
+#     --profile perfiles/blocks-nas100-robustez.yaml -o output/BlockSettings_robustez.sqb
+#
+# Todos los nombres están validados contra el catálogo real.
+
+name: nas100-robustez
+description: 15 señales de familias diversas + indicadores + stops
+
+# ── Señales: 7 originales + 8 nuevas de familias distintas ────────────────────
+# Más variedad = más combinaciones posibles para el builder, lo que permite
+# encontrar reglas que disparen seguido sin perder poder predictivo.
+signals:
+  # Originales (tendencia + momentum + volatilidad)
+  - SuperTrendDownTrend      # tendencia
+  - IsDowntrend              # tendencia
+  - RSIFalling               # momentum
+  - MACDSignalFalling        # momentum
+  - ADXHigher                # fuerza de tendencia
+  - ATRRising                # volatilidad
+  - BBUpperFalling           # volatilidad
+  # Nuevas (familias no representadas antes)
+  - StochSlowDCrossDown      # oscilador — cruce de la línea D
+  - CCIChangesDown           # oscilador — CCI girando a la baja
+  - MomFalling               # momentum puro
+  - ADXRising                # fuerza de tendencia creciente
+  - PSARBarLower             # reversión — Parabolic SAR bajista
+  - ROCCrossesBelowLevel     # tasa de cambio
+  - VortexDowntrend          # tendencia (familia propia)
+  - MACDMainCrossBelowZero   # momentum — cruce bajo cero
+
+# ── Indicadores, precios y operadores ────────────────────────────────────────
+indicators:
+  - Indicators.RSI
+  - Indicators.MACD
+  - Indicators.ATR
+  - Indicators.ADX
+  - Prices.Close
+  - Prices.High
+  - Prices.Low
+  - IsGreater
+  - IsLower
+  - CrossesAbove
+  - CrossesBelow
+
+# ── Niveles de stop / target ─────────────────────────────────────────────────
+stopLimitBlocks:
+  - Stop/Limit Price Levels.BollingerBands
+  - Stop/Limit Price Levels.SuperTrend
+  - Stop/Limit Price Levels.SMA
+  - Stop/Limit Price Ranges.ATR
+
+order_types:
+  - EnterAtStop
+  - EnterAtLimit
+
+exit_types:
+  - ExitAfterBars.ExitAfterBars
+  - MoveSL2BE.MoveSL2BE
+  - ProfitTarget.ProfitTarget
+  - StopLoss.StopLoss
+  - TrailingStop.TrailingStop
