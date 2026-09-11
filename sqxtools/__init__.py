@@ -13,6 +13,7 @@ from .ai_analyzer import get_system_prompt, prepare_for_agent
 from .data_downloader import download_dukascopy, download_yfinance, load_data
 from .edge_analyzer import analyze_market
 from .date_optimizer import optimize_date_ranges
+from .cfx_builder import apply_builder_profile, load_builder_profile
 from .sqb_parser import parse_sqb, get_block_summary as sqb_block_summary
 from .sqb_builder import (
     build_recommended_sqb,
@@ -51,6 +52,8 @@ __all__ = [
     "load_data",
     "analyze_market",
     "optimize_date_ranges",
+    "apply_builder_profile",
+    "load_builder_profile",
     "parse_sqb",
     "sqb_block_summary",
     "build_recommended_sqb",

@@ -13,6 +13,7 @@ from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
 from .date_optimizer import optimize_date_ranges
+from .cfx_builder import apply_builder_profile, load_builder_profile
 from .sqb_builder import (
     build_recommended_sqb,
     get_block_definition,
@@ -499,6 +500,73 @@ def _generate_full_proposal(edge: dict, dates: dict, builder: dict | None) -> di
 
 
 
+
+def cmd_build_cfx(args):
+    """Aplica un perfil de configuración sobre un .cfx existente."""
+    template = Path(args.template)
+    if not template.exists():
+        print(f"ERROR: no existe {template}", file=sys.stderr)
+        return 1
+
+    if not args.profile and not args.settings:
+        print("ERROR: indicá --profile o --settings", file=sys.stderr)
+        return 1
+
+    try:
+        profile = load_builder_profile(args.profile) if args.profile else {}
+    except (FileNotFoundError, ValueError, ImportError, json.JSONDecodeError) as e:
+        print(f"ERROR leyendo el perfil: {e}", file=sys.stderr)
+        return 1
+
+    # --settings permite ajustes sueltos tipo seccion.clave=valor
+    if args.settings:
+        for item in args.settings.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if "=" not in item or "." not in item.split("=", 1)[0]:
+                print(f"ERROR: --settings espera 'seccion.clave=valor', recibí '{item}'", file=sys.stderr)
+                return 1
+            dotted, val = item.split("=", 1)
+            section, key = dotted.split(".", 1)
+            profile.setdefault(section.strip(), {})[key.strip()] = val.strip()
+
+    out = args.output or "output/builder_optimizado.cfx"
+    try:
+        report = apply_builder_profile(template, out, profile)
+    except (ValueError, KeyError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+    print(f"✓ .cfx generado → {report['output']}")
+    print(f"  Aplicados: {report['applied']} cambios")
+    print()
+
+    for c in report["changes"]:
+        st = c.get("status")
+        name = c.get("setting", "")
+        if st == "changed":
+            if c.get("changes"):
+                print(f"  ✓ {name}: {', '.join(c['changes'])}")
+            else:
+                print(f"  ✓ {name}: {c.get('from')} → {c.get('to')}")
+        elif st == "added":
+            print(f"  + {name}: NUEVO {c.get('comparator')} {c.get('value')}")
+        elif st == "unchanged":
+            print(f"  = {name}: ya en {c.get('value')}")
+        elif st == "already_exists":
+            print(f"  = {name}: ya existe")
+        else:
+            print(f"  ⚠ {name}: {st}")
+
+    if report["warnings"]:
+        print()
+        print("  ⚠ Advertencias:")
+        for w in report["warnings"]:
+            print(f"    {w}")
+    return 0
+
+
 def cmd_build_sqb(args):
     """Genera un .sqb recomendado a partir del catálogo de bloques origen."""
     template = Path(args.template)
@@ -812,6 +880,14 @@ def main(argv: list[str] | None = None) -> int:
     p_full.add_argument("-o", "--output", help="Salida JSON")
     p_full.set_defaults(func=cmd_full_analysis)
 
+
+    # build-cfx
+    p_cfx = sub.add_parser("build-cfx", help="Aplica un perfil de configuración a un .cfx")
+    p_cfx.add_argument("--template", required=True, help=".cfx origen")
+    p_cfx.add_argument("--profile", help="Perfil YAML/JSON con los ajustes")
+    p_cfx.add_argument("--settings", help="Ajustes sueltos: 'seccion.clave=valor' separados por coma")
+    p_cfx.add_argument("-o", "--output", help="Salida .cfx")
+    p_cfx.set_defaults(func=cmd_build_cfx)
 
     # build-sqb
     p_build = sub.add_parser("build-sqb", help="Genera .sqb recomendado desde catálogo")

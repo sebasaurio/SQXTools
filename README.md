@@ -78,6 +78,10 @@ python -m sqxtools.cli build-sqb --template BlockSettings.sqb \
 # Comparar el .sqb actual con el recomendado (qué se activa / desactiva)
 python -m sqxtools.cli diff-sqb actual.sqb recomendado.sqb -o diff.json
 
+# Aplicar un perfil de configuración a un .cfx del builder
+python -m sqxtools.cli build-cfx --template v5.cfx \
+  --profile perfiles/builder-nas100-winrate.yaml -o output/v6.cfx
+
 # Perfiles de bloques: extraer, guardar, validar
 python -m sqxtools.cli profile --from-sqb actual.sqb -o nas100.yaml
 python -m sqxtools.cli profile --validate nas100.yaml --template BlockSettings.sqb
@@ -86,6 +90,25 @@ python -m sqxtools.cli profile --validate nas100.yaml --template BlockSettings.s
 python -m sqxtools.cli cache --list
 python -m sqxtools.cli cache --clear
 ```
+
+### Modificar la configuración del builder (`.cfx`)
+
+A diferencia de los perfiles de `.sqb` (selección de bloques), un **perfil de builder**
+cambia los *parámetros de configuración* de un `.cfx` existente — SL/PT, condiciones de
+entrada, filtros horarios, rankings, probabilidades de salida — preservando intacto todo
+lo demás (bloques, recursos, databanks).
+
+```bash
+python -m sqxtools.cli build-cfx --template v5.cfx \
+  --profile perfiles/builder-nas100-winrate.yaml -o output/v6.cfx
+
+# Ajustes sueltos sin perfil
+python -m sqxtools.cli build-cfx --template v5.cfx -o v6.cfx \
+  --settings "risk_reward.limit_slpt_rrr=true,risk_reward.rrr_from=60,entries.min_conditions=3"
+```
+
+Secciones del perfil: `risk_reward`, `entries`, `trading`, `rankings`, `exits`.
+Las claves desconocidas se reportan como advertencia en vez de ignorarse en silencio.
 
 ### Perfiles de bloques
 
@@ -271,6 +294,7 @@ SQXTools/
 │   ├── parser.py           # Parser de .cfx (XML → modelo)
 │   ├── sqb_parser.py       # Parser de .sqb (Block Settings)
 │   ├── sqb_builder.py      # Generador de .sqb recomendado (usa el catálogo origen)
+│   ├── cfx_builder.py      # Aplica perfiles de configuración sobre un .cfx
 │   ├── models.py           # Dataclasses del modelo
 │   ├── analyzer.py         # Resumen ejecutivo
 │   ├── compare.py          # Comparador de configs
@@ -283,6 +307,7 @@ SQXTools/
 │   └── tests/
 │       ├── test_parser.py      # Tests del parser .cfx
 │       ├── test_sqb.py         # Tests de .sqb (parser, builder, validación, diff, perfiles)
+│       ├── test_cfx_builder.py # Tests del patcher de .cfx
 │       ├── test_real_files.py  # Tests con .cfx reales
 │       ├── conftest.py
 │       └── fixtures/           # .cfx de ejemplo

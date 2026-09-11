@@ -409,28 +409,44 @@ def _analyze_trading_options(trading_options: list[dict]) -> dict[str, Any]:
     else:
         analysis["info"].append(f"MaxTradesPerDay={max_trades}")
     
-    # Min/Max SL/PT en pips (si están configurados)
-    min_sl = opts.get("MinimumSL", 0)
-    max_sl = opts.get("MaximumSL", 0)
-    min_pt = opts.get("MinimumPT", 0)
-    max_pt = opts.get("MaximumPT", 0)
-    
+    # Min/Max SL/PT en pips (límites duros de trading options, distintos de los
+    # rangos de SL/PT que genera el builder en SLPTOptions)
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    min_sl = _num(opts.get("MinimumSL", 0))
+    max_sl = _num(opts.get("MaximumSL", 0))
+    min_pt = _num(opts.get("MinimumPT", 0))
+    max_pt = _num(opts.get("MaximumPT", 0))
+
     if min_sl == 0 and max_sl == 0 and min_pt == 0 and max_pt == 0:
-        analysis["warnings"].append("Sin restricciones Min/Max SL/PT en pips. Puede generar estrategias con SL/PT extremos.")
+        analysis["warnings"].append(
+            "Sin límites duros Min/Max SL/PT en trading options — el builder puede "
+            "elegir SL/PT extremos aunque los rangos de SLPTOptions sean razonables."
+        )
     else:
         if min_sl > 0:
-            analysis["info"].append(f"MinSL={min_sl} pips")
+            analysis["info"].append(f"Límite MinSL={min_sl:g} pips")
         if max_sl > 0:
-            analysis["info"].append(f"MaxSL={max_sl} pips")
+            analysis["info"].append(f"Límite MaxSL={max_sl:g} pips")
         if min_pt > 0:
-            analysis["info"].append(f"MinPT={min_pt} pips")
+            analysis["info"].append(f"Límite MinPT={min_pt:g} pips")
         if max_pt > 0:
-            analysis["info"].append(f"MaxPT={max_pt} pips")
-    
-    # Session
+            analysis["info"].append(f"Límite MaxPT={max_pt:g} pips")
+
+    # Session (filtro de sesión predefinida, independiente del time range)
     session = opts.get("Session", "No Session")
     if session == "No Session":
-        analysis["info"].append("Sin filtro de sesión — opera 24h.")
+        if limit_time:
+            analysis["info"].append(
+                "Sin sesión predefinida, pero el filtro horario está activo "
+                "(el rango de horas sí limita las entradas)."
+            )
+        else:
+            analysis["info"].append("Sin filtro de sesión ni horario — opera 24h.")
     else:
         analysis["info"].append(f"Session: {session}")
     

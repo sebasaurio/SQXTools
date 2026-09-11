@@ -1,0 +1,52 @@
+# Perfil de BUILDER (no confundir con perfiles de .sqb) — optimiza win/loss ratio
+#
+# Aplica cambios de configuración sobre un .cfx existente preservando todo lo demás.
+#
+# Uso:
+#   python -m sqxtools.cli build-cfx --template v5.cfx \
+#     --profile perfiles/builder-nas100-winrate.yaml -o output/v6.cfx
+#
+# Basado en el análisis de v5 + mercado NAS100 H1 (39.485 barras, Dukascopy).
+# Ver analisis/v5-optimizacion-winloss.md para el razonamiento completo.
+
+name: nas100-winrate
+description: Sube win/loss ratio acotando el RRR y filtrando entradas
+
+# ── Riesgo/Beneficio: el cambio más importante ────────────────────────────────
+# El RRR manda sobre el win rate. Breakeven = 1/(1+RRR).
+# Con PT = 0.6x-1.2x el SL el breakeven queda en 45.5%-62.5%.
+risk_reward:
+  limit_slpt_rrr: true      # antes: false (sin techo de RRR)
+  rrr_from: 60              # PT = 0.60x SL
+  rrr_to: 120               # PT = 1.20x SL
+  sl_atr_multiple_min: 1.5  # sin cambio
+  sl_atr_multiple_max: 2.5  # sin cambio
+  pt_atr_multiple_min: 1.2  # antes: 2.0
+  pt_atr_multiple_max: 2.0  # antes: 4.5
+
+# ── Entradas: exigir más confirmaciones simultáneas ───────────────────────────
+entries:
+  min_conditions: 3         # antes: 1
+  max_conditions: 3         # antes: 2
+
+# ── Filtros de operación ──────────────────────────────────────────────────────
+trading:
+  # El rango horario ya estaba configurado pero APAGADO (no tenía efecto).
+  # Mejor hora para shorts en NAS100: 14 UTC (12:00–15:00 UTC = 43200–54000).
+  limit_time_range: true    # antes: false
+  signal_time_from: 43200   # 12:00 UTC
+  signal_time_to: 54000     # 15:00 UTC
+  max_trades_per_day: 3     # antes: 0 (sin límite)
+  dont_trade_weekends: true # antes: false (gap risk)
+  exit_on_friday: true      # sin cambio (ya estaba)
+  max_open_positions_short: 2  # antes: 8 (riesgo de correlación en NAS100)
+
+# ── Rankings: filtrar por calidad de trades ───────────────────────────────────
+rankings:
+  fitness: SharpeRatio      # antes: ReturnDDRatio (premia RRR alto → anti win rate)
+  profit_factor_min: 1.45   # antes: 1.2
+  win_loss_ratio_min: 1.5   # NUEVO: filtro explícito de win/loss ratio
+
+# ── Salidas ───────────────────────────────────────────────────────────────────
+exits:
+  exit_after_bars_probability: 20   # antes: 50 (salidas aleatorias)
