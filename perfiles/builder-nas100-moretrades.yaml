@@ -1,0 +1,52 @@
+# Perfil de BUILDER — variante "MÁS TRADES" (mismo control de calidad)
+#
+# Objetivo: subir el número de trades por período SIN bajar los filtros de calidad
+# (ProfitFactor y WinLossRatio se mantienen). Se relajan los límites de OPORTUNIDAD,
+# no los de CALIDAD — así las estrategias siguen siendo buenas, solo que operan más.
+#
+# Uso:
+#   python -m sqxtools.cli build-cfx --template output/v6_winrate.cfx \
+#     --profile perfiles/builder-nas100-moretrades.yaml -o output/v7_moretrades.cfx
+#
+# Diagnóstico: 300 trades en 8 años = ~37/año ≈ 3/mes. Para robustez estadística
+# conviene apuntar a 100+/año. Los topes que lo limitaban:
+
+name: nas100-moretrades
+description: Más trades manteniendo los filtros de calidad
+
+# ── Entradas: el mayor limitante de oportunidades ─────────────────────────────
+# Exigir 3 señales simultáneas es MUY restrictivo. Bajar a 2 y dejar maxConditions
+# en 3 permite al builder elegir combinaciones de 2 o 3 condiciones.
+# NOTA: esto sube la cantidad de entradas, no baja la calidad — los filtros de
+# ranking (PF, WLR) siguen descartando las estrategias malas.
+entries:
+  min_conditions: 2         # antes: 3
+  max_conditions: 3         # sin cambio
+
+# ── Ventana horaria: más horas = más oportunidades ────────────────────────────
+# 08:00–20:00 UTC cubre Londres + NY = 56.3% del día (vs 38.9% de 12–20).
+# Excluye igual las horas muertas (00–07 y 21–23), que son el 27.6% del día
+# con la mitad del movimiento — donde el spread se come el edge.
+trading:
+  limit_time_range: true
+  signal_time_from: 28800   # 08:00 UTC (antes 43200 = 12:00)
+  signal_time_to: 72000     # 20:00 UTC
+
+  # Topes de concurrencia: principales capadores del conteo total.
+  # 2 posiciones simultáneas con holds de ~5-15 barras limita mucho el total.
+  max_open_positions_short: 4   # antes: 2
+  max_trades_per_day: 6         # antes: 3
+
+# ── Riesgo/Beneficio: SIN CAMBIOS (el RRR acotado es lo que sube el win rate) ──
+# Se mantiene LimitSLPTRRR 60–120 y PT ATR 1.2–2.0.
+# Bonus: un PT más corto cierra trades más rápido → más rotación → más trades.
+
+# ── Rankings: SIN CAMBIOS — la calidad no se toca ─────────────────────────────
+# fitness SharpeRatio, ProfitFactor >= 1.45, WinLossRatio >= 1.5.
+# ESTO es lo que no hay que relajar: si se baja acá, sube la cantidad de trades
+# pero entra basura al databank.
+
+# ── Salidas ───────────────────────────────────────────────────────────────────
+# ExitAfterBars con menos probabilidad cierra más seguido por PT/SL → más rotación.
+exits:
+  exit_after_bars_probability: 20   # sin cambio
