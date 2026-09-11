@@ -1,9 +1,7 @@
 """AI Analyzer — prepara el resumen para que el agente analice directamente."""
 
 import json
-import sys
 from pathlib import Path
-from typing import Any
 
 from .analyzer import summarize
 from .parser import parse_cfx

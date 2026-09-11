@@ -1,6 +1,6 @@
 # SQXTools
 
-Parser y analizador de archivos **.cfx** de StrategyQuant — convierte building config, build, retester, optimizer, custom project e info en **JSON/Markdown/YAML legible para IA**.
+Parser y analizador de archivos **.cfx** y **.sqb** de StrategyQuant — convierte building config, build, retester, optimizer, custom project, info y Block Settings en **JSON/Markdown/YAML legible para IA**. Incluye análisis de mercado, optimizador de fechas IS/OOS y generador de `.sqb` recomendado.
 
 ## ¿Qué hace?
 
@@ -41,10 +41,42 @@ python -m sqxtools.cli list-categories archivo.cfx
 # Comparar dos .cfx (qué bloques cambian, qué SLPT difiere, etc.)
 python -m sqxtools.cli compare build1.cfx build2.cfx -o diff.json
 
-# ✨ Analizar con IA (LLM) — propone mejoras para tu builder
-python -m sqxtools.cli ai-analyze archivo.cfx --provider anthropic -o mejoras.md
-python -m sqxtools.cli ai-analyze archivo.cfx --provider openai --model gpt-4o
+# Preparar el resumen para que el agente (IA de la sesión) lo analice
+python -m sqxtools.cli ai-analyze archivo.cfx -o resumen_ai.json
 ```
+
+### Análisis de mercado y generación de `.sqb`
+
+```bash
+# Analizar el mercado real y proponer un builder óptimo (Dukascopy o Yahoo Finance)
+python -m sqxtools.cli edge-finder --symbol NAS100 --timeframe H1 --source dukascopy
+
+# Proponer rangos IS/OOS óptimos según regímenes de volatilidad
+python -m sqxtools.cli date-optimizer --symbol NAS100 --timeframe H1 --source dukascopy
+
+# Análisis completo: mercado + fechas + builder (todo integrado)
+python -m sqxtools.cli full-analysis --symbol NAS100 --timeframe H1 --source dukascopy
+
+# Ver el catálogo real de bloques y su firma EXACTA de parámetros
+python -m sqxtools.cli catalog --template BlockSettings.sqb --category signals
+python -m sqxtools.cli catalog --template BlockSettings.sqb --block RSIFalling
+
+# Generar un .sqb recomendado desde el catálogo origen
+# (preserva la firma exacta de parámetros de cada bloque; solo cambia use=true/false)
+python -m sqxtools.cli build-sqb --template BlockSettings.sqb -o salida.sqb \
+  --signals "SuperTrendDownTrend,RSIFalling,ADXHigher" \
+  --indicators "Indicators.RSI,Indicators.ATR,Prices.Close,IsGreater" \
+  --stops "Stop/Limit Price Ranges.ATR"
+
+# Gestionar el cache de datos Parquet
+python -m sqxtools.cli cache --list
+python -m sqxtools.cli cache --clear
+```
+
+> **Importante:** `build-sqb` usa el `.sqb` origen como plantilla y conserva los 524
+> bloques con su firma exacta de parámetros. StrategyQuant **valida esa firma**: si un
+> bloque tiene un parámetro que no existe en su definición (p. ej. `#Level#` en
+> `RSIFalling`), SQ **no lo marca**. Nunca construyas bloques con parámetros inventados.
 
 ## Salida JSON — Estructura
 
@@ -197,18 +229,26 @@ Los tests incluyen fixtures reales (2 archivos `.cfx` de ejemplo).
 SQXTools/
 ├── sqxtools/
 │   ├── __init__.py         # API pública
-│   ├── parser.py           # Parser del XML → modelo
+│   ├── parser.py           # Parser de .cfx (XML → modelo)
+│   ├── sqb_parser.py       # Parser de .sqb (Block Settings)
+│   ├── sqb_builder.py      # Generador de .sqb recomendado (usa el catálogo origen)
 │   ├── models.py           # Dataclasses del modelo
 │   ├── analyzer.py         # Resumen ejecutivo
 │   ├── compare.py          # Comparador de configs
 │   ├── serializer.py       # JSON / Markdown / YAML
+│   ├── ai_analyzer.py      # Prompt de sistema para el análisis con IA
+│   ├── data_downloader.py  # Descarga Dukascopy / Yahoo (Parquet + cache incremental)
+│   ├── edge_analyzer.py    # Análisis de mercado y propuestas de builder
+│   ├── date_optimizer.py   # Optimizador de rangos IS/OOS
 │   ├── cli.py              # Interfaz CLI
 │   └── tests/
-│       ├── test_parser.py  # Tests unitarios
+│       ├── test_parser.py      # Tests del parser .cfx
+│       ├── test_sqb.py         # Tests de .sqb (parser + builder)
 │       ├── test_real_files.py  # Tests con .cfx reales
 │       ├── conftest.py
-│       └── fixtures/       # .cfx de ejemplo
+│       └── fixtures/           # .cfx de ejemplo
 ├── README.md
+├── .gitignore
 └── setup.py
 ```
 

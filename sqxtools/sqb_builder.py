@@ -19,7 +19,6 @@ Por qué es necesario:
   que en realidad usa #ComputedFrom#), SQ no lo reconoce y queda sin marcar.
 """
 
-import copy
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path

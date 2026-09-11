@@ -4,15 +4,8 @@ Los datos se guardan en formato Parquet (compresión columnar) para lectura ráp
 Se usa cache: si el archivo ya existe, actualiza solo los datos faltantes.
 """
 
-import csv
-import io
-import os
-import time
-import urllib.request
-import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -197,7 +190,7 @@ def download_yfinance(
         df_new = ticker.history(period=period, interval=timeframe)
     
     if df_new.empty:
-        print(f"✓ No hay datos nuevos")
+        print("✓ No hay datos nuevos")
         return out_path
     
     df_new = df_new.reset_index()

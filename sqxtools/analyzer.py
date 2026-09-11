@@ -1,7 +1,6 @@
 """Analizador de estrategias — genera resumen legible de un CfxConfig."""
 
 from collections import Counter
-from pathlib import Path
 from typing import Any
 
 from .models import CfxConfig

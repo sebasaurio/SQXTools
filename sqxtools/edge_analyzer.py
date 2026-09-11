@@ -7,48 +7,10 @@ Propuesta de building blocks separada en categorías:
 """
 
 import pandas as pd
-import numpy as np
-from pathlib import Path
 from typing import Any
-from datetime import datetime
 
 
 # Mapeo de señales propuestas a categorías y parámetros típicos en StrategyQuant
-SIGNAL_CATALOG = {
-    # Señales (entry signals)
-    "SuperTrendDownTrend": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "10", "#Multiplier#": "3"}},
-    "IsDowntrend": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "20"}},
-    "RSIFalling": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14", "#Level#": "50"}},
-    "MACDSignalFalling": {"category": "signals", "params": {"#Chart#": "Main", "#Fast#": "12", "#Slow#": "26", "#Signal#": "9"}},
-    "MACDMainFalling": {"category": "signals", "params": {"#Chart#": "Main", "#Fast#": "12", "#Slow#": "26"}},
-    "ADXHigher": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14", "#Level#": "25"}},
-    "ATRRising": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14"}},
-    "ATRCrossUp": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14"}},
-    "ATRCrossDown": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14"}},
-    "BollingerBandsOutside": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "20", "#Deviation#": "2"}},
-    "ADXRising": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14"}},
-    
-    # Indicadores (confirmation indicators)
-    "Indicators.RSI": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "14"}},
-    "Indicators.MACD": {"category": "indicators", "params": {"#Chart#": "Main", "#Fast#": "12", "#Slow#": "26", "#Signal#": "9"}},
-    "Indicators.ATR": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "14"}},
-    "Indicators.ADX": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "14"}},
-    "Indicators.SuperTrend": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "10", "#Multiplier#": "3"}},
-    "Indicators.BollingerBands": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "20", "#Deviation#": "2"}},
-    "Indicators.EMA": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "20"}},
-    "Indicators.SMA": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "50"}},
-    
-    # Stop/Limit Price Levels (niveles de stop/target basados en indicadores)
-    "Stop/Limit Price Levels.RSI": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "14", "#Level#": "30"}},
-    "Stop/Limit Price Levels.MACD": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Fast#": "12", "#Slow#": "26"}},
-    "Stop/Limit Price Levels.ATR": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "14"}},
-    "Stop/Limit Price Levels.SuperTrend": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "10", "#Multiplier#": "3"}},
-    "Stop/Limit Price Levels.BollingerBands": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "20", "#Deviation#": "2"}},
-    "Stop/Limit Price Levels.EMA": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "20"}},
-    "Stop/Limit Price Levels.SMA": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "50"}},
-    "Stop/Limit Price Ranges.ATR": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "14"}},
-}
-
 
 def analyze_market(
     df: pd.DataFrame,
@@ -260,17 +222,16 @@ def _propose_builder_config(analysis: dict) -> dict:
         proposal["sessions"] = [8, 9, 13, 14, 15]
         proposal["session_note"] = "Sesión por defecto: apertura Londres y NY"
     
-    # === Building blocks con parámetros y valores por defecto ===
+    # === Building blocks organizados por categoría ===
+    # NOTA: no se adjuntan parámetros inventados. Los parámetros reales de cada bloque
+    # se preservan automáticamente al construir el .sqb desde el catálogo origen con
+    # sqb_builder.build_recommended_sqb(), que mantiene la firma exacta de StrategyQuant.
     for cat, inds in analysis.get("indicators", {}).items():
         for ind in inds:
             block = {
                 "name": ind["name"],
                 "reason": ind["reason"],
-                "params": {},
             }
-            # Buscar parámetros en el catálogo
-            if ind["name"] in SIGNAL_CATALOG:
-                block["params"] = SIGNAL_CATALOG[ind["name"]].get("params", {})
             proposal["building_blocks"][cat].append(block)
     
     proposal["risk"] = {

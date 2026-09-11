@@ -1,0 +1,41 @@
+# Bytecode / cache de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+ENV/
+
+# Testing / cobertura
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Datos de mercado (Parquet generados por el cache incremental)
+data/
+*.parquet
+
+# Salidas generadas
+*.summary.json
+*.filtered.json
+*.ai_input.json
+diff.json
+edge_finder_*.json
+full_analysis_*.json
+
+# Temporales
+*.tmp
+*.log
+.DS_Store

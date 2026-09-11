@@ -10,7 +10,7 @@ Analiza el mercado para detectar:
 import pandas as pd
 import numpy as np
 from typing import Any
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 
 def optimize_date_ranges(
@@ -280,7 +280,6 @@ def _generate_recommendation(analysis: dict) -> dict:
     """Genera recomendación final basada en el análisis."""
     total_years = analysis["data_info"]["total_years"]
     regimes = analysis.get("regimes", [])
-    proposals = analysis.get("proposals", [])
     
     recommendation = {
         "optimal_is_years": 0,

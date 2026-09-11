@@ -6,15 +6,13 @@ import sys
 from pathlib import Path
 
 from .parser import parse_cfx
-from .serializer import save_output, to_json, to_markdown
-from .analyzer import summarize, active_blocks_only, blocks_by_category
+from .serializer import save_output
+from .analyzer import summarize
 from .compare import compare_configs
-from .ai_analyzer import get_system_prompt
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
 from .date_optimizer import optimize_date_ranges
-from .sqb_builder import build_recommended_sqb, get_block_definition, dump_catalog, list_blocks
-import pandas as pd
+from .sqb_builder import build_recommended_sqb, get_block_definition, dump_catalog
 
 
 def cmd_parse(args):
@@ -167,19 +165,24 @@ def cmd_edge_finder(args):
     
     # Mostrar resumen
     print(f"\n✓ Análisis de mercado completo → {out}")
-    print(f"  Barras analizadas: {analysis['data_info']['total_bars']}")
-    print(f"  Volatilidad promedio: {analysis['volatility']['avg_range_pct']:.3f}%")
-    
-    if analysis.get("sessions", {}).get("best_trading_hours"):
-        print(f"  Mejores horas para shorts: {[h['hour'] for h in analysis['sessions']['best_trading_hours']]}")
-    
-    if analysis.get("builder_proposal", {}).get("signals"):
-        print(f"  Señales propuestas: {analysis['builder_proposal']['signals']}")
-    
-    if analysis.get("builder_proposal", {}).get("risk"):
-        risk = analysis["builder_proposal"]["risk"]
-        print(f"  Risk: ${risk['fixed_amount']}/trade, {risk['drawdown_pct']}% drawdown")
-    
+    print(f"  Barras analizadas: {analysis.get('data_info', {}).get('total_bars', 'n/a')}")
+
+    vol = analysis.get("volatility", {}).get("avg_range_pct")
+    if vol is not None:
+        print(f"  Volatilidad promedio: {vol:.3f}%")
+
+    hours = analysis.get("sessions", {}).get("best_trading_hours") or []
+    if hours:
+        print(f"  Mejores horas para shorts: {[h.get('hour') for h in hours]}")
+
+    proposal = analysis.get("builder_proposal", {})
+    if proposal.get("signals"):
+        print(f"  Señales propuestas: {[s.get('name') for s in proposal['signals']]}")
+
+    risk = proposal.get("risk")
+    if risk:
+        print(f"  Risk: ${risk.get('fixed_amount')}/trade, {risk.get('drawdown_pct')}% drawdown")
+
     return 0
 
 
@@ -550,7 +553,7 @@ def cmd_catalog(args):
             return 1
         print(f"Bloque: {d['key']}")
         print(f"  Categoría: {d['category']}")
-        print(f"  Parámetros:")
+        print("  Parámetros:")
         for p in d["params"]:
             extra = f" values={p['values']}" if p.get("values") else ""
             print(f"    {p['key']} ({p['type']}){extra}")

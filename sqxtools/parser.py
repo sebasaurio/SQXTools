@@ -31,7 +31,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from .models import CfxConfig, CfxType, Param
+from .models import CfxConfig, CfxType
 
 
 def _parse_value(raw: str | None) -> tuple[Any, str]:

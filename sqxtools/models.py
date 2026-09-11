@@ -128,10 +128,11 @@ class SqbBlock:
     weight: str = "1"
     use: bool = False
     category: str = ""
-    indicator_min: str = None
-    indicator_max: str = None
-    generated: SqbParam = None
-    predefined: SqbPredefined = None
+    indicator_min: str | None = None
+    indicator_max: str | None = None
+    indicator_step: str | None = None
+    generated: SqbParam | None = None
+    predefined: SqbPredefined | None = None
 
 
 @dataclass
