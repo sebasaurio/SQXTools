@@ -15,6 +15,7 @@ SYSTEM_PROMPT = """Eres un experto en trading algorítmico y StrategyQuant. Tu t
 Analiza:
 1. **Indicadores y bloques activos**: detecta redundancias, conflictos, combinaciones débiles, oportunidades perdidas.
 2. **Risk Management**: evalúa SL/PT, money management, drawdown máximo. Propone ajustes si es necesario.
+2b. **Trading Options**: revisa trading_options_analysis. Evalúa time range, exit on Friday, fines de semana, max trades, SL/PT mín/máximo, sesiones, gaps. Destaca warnings como problemas a corregir.
 3. **Robustness (SOLO si cross-check global está activo)**: si cross_checks.use=true, verifica qué individuales están habilitados y recomienda activar los falten. Si cross_checks.use=false, omite completamente esta sección — el usuario decidió no usar cross-checks y no es una alerta.
 4. **Fechas IS/OOS**: revisa data.date_analysis. Si hay issues (especialmente el crítico de OOS=IS), destácalo como lo más importante. Si los rangos OOS son subconjuntos adecuados, confirma que está bien.
 5. **Mejoras concretas**: propón bloques adicionales que podrían mejorar la estrategia, parámetros a optimizar, condiciones de ranking más estrictas.
@@ -28,6 +29,9 @@ Formato de salida (obligatorio):
 
 ## Risk Management
 [Evaluación de SL/PT/MM, propuestas de ajuste]
+
+## Trading Options
+[Análisis de trading_options_analysis: time range, exit on Friday, fines de semana, max trades, SL/PT mín/máximo, gaps, sesiones]
 
 ## Fechas IS/OOS
 [Análisis de data.date_analysis: cobertura, overlaps, gaps, recomendaciones]

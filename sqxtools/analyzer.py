@@ -71,6 +71,10 @@ def summarize(cfg: CfxConfig) -> dict[str, Any]:
     indicators = _extract_indicators(active_blocks)
     summary["indicators"] = indicators
 
+    # === Trading Options (configuración de trading) ===
+    summary["trading_options"] = cfg.settings.get("trading_options", [])
+    summary["trading_options_analysis"] = _analyze_trading_options(cfg.settings.get("trading_options", []))
+
     # === Data / Setups ===
     data = cfg.data
     if data:
@@ -301,6 +305,142 @@ def _extract_indicators(active_blocks: list[dict]) -> list[dict]:
             "params": param_summary,
         })
     return indicators
+
+
+def _analyze_trading_options(trading_options: list[dict]) -> dict[str, Any]:
+    """Analiza los parámetros de trading_options y detecta problemas."""
+    opts = {o["key"]: o["value"] for o in trading_options}
+    
+    analysis: dict[str, Any] = {
+        "raw": opts,
+        "issues": [],
+        "warnings": [],
+        "info": [],
+    }
+    
+    # Time Range
+    limit_time = opts.get("LimitTimeRange", False)
+    time_from = opts.get("SignalTimeRangeFrom", 0)
+    time_to = opts.get("SignalTimeRangeTo", 0)
+    
+    if limit_time:
+        from_h = time_from // 3600
+        from_m = (time_from % 3600) // 60
+        to_h = time_to // 3600
+        to_m = (time_to % 3600) // 60
+        analysis["info"].append(f"Time Range habilitado: {from_h:02d}:{from_m:02d} - {to_h:02d}:{to_m:02d}")
+        
+        # Evaluar si el rango es muy corto o muy largo
+        range_hours = (time_to - time_from) / 3600
+        if range_hours < 4:
+            analysis["warnings"].append(f"Time Range muy corto ({range_hours:.1f}h). Podría limitar demasiado las oportunidades.")
+        elif range_hours > 12:
+            analysis["warnings"].append(f"Time Range muy largo ({range_hours:.1f}h). Incluye horas de baja liquidez.")
+        
+        # Si el rango incluye la apertura de Londres (8:00-9:00) o Nueva York (13:00-14:00)
+        if time_from <= 28800 and time_to >= 32400:
+            analysis["info"].append("Incluye apertura de Londres (8:00-9:00 UTC) — alta volatilidad.")
+        if time_from <= 46800 and time_to >= 50400:
+            analysis["info"].append("Incluye apertura de NY (13:00-14:00 UTC) — alta volatilidad.")
+    else:
+        if time_from != 0 or time_to != 0:
+            analysis["warnings"].append(f"SignalTimeRangeFrom={time_from}/To={time_to} configurados pero LimitTimeRange=false (no tienen efecto).")
+    
+    # Exit on Friday
+    exit_friday = opts.get("ExitOnFriday", False)
+    friday_time = opts.get("FridayExitTime", 0)
+    if exit_friday:
+        h = friday_time // 3600
+        m = (friday_time % 3600) // 60
+        analysis["info"].append(f"Exit On Friday habilitado: {h:02d}:{m:02d} UTC")
+        if friday_time > 72000:  # Después de las 20:00
+            analysis["warnings"].append("Exit On Friday tarde (después 20:00 UTC) — puede mantener posiciones overnight.")
+    else:
+        analysis["info"].append("Exit On Friday desactivado — posiciones pueden mantenerse overnight hasta el viernes.")
+    
+    # DontTradeOnWeekends
+    dont_weekend = opts.get("DontTradeOnWeekends", False)
+    if not dont_weekend:
+        analysis["warnings"].append("DontTradeOnWeekends=false — se permite operar fines de semana (gap risk).")
+    else:
+        friday_close = opts.get("FridayCloseTime", 0)
+        sunday_open = opts.get("SundayOpenTime", 0)
+        fc_h = friday_close // 3600
+        so_h = sunday_open // 3600
+        analysis["info"].append(f"No operar fines de semana. Viernes cierre: {fc_h:02d}:00, Domingo apertura: {so_h:02d}:00 UTC")
+    
+    # Exit at End of Day
+    exit_eod = opts.get("ExitAtEndOfDay", False)
+    eod_time = opts.get("EODExitTime", 0)
+    if exit_eod:
+        h = eod_time // 3600
+        m = (eod_time % 3600) // 60
+        analysis["info"].append(f"Exit EOD: {h:02d}:{m:02d} UTC")
+    else:
+        analysis["info"].append("Exit EOD desactivado — posiciones pueden mantenerse de un día a otro.")
+    
+    # Max Trades Per Day
+    max_trades = opts.get("MaxTradesPerDay", 0)
+    if max_trades == 0:
+        analysis["warnings"].append("MaxTradesPerDay=0 (sin límite). Riesgo de overtrading en sesiones volátiles.")
+    elif max_trades > 10:
+        analysis["warnings"].append(f"MaxTradesPerDay={max_trades} — bastante alto, puede generar overtrading.")
+    else:
+        analysis["info"].append(f"MaxTradesPerDay={max_trades}")
+    
+    # Min/Max SL/PT en pips (si están configurados)
+    min_sl = opts.get("MinimumSL", 0)
+    max_sl = opts.get("MaximumSL", 0)
+    min_pt = opts.get("MinimumPT", 0)
+    max_pt = opts.get("MaximumPT", 0)
+    
+    if min_sl == 0 and max_sl == 0 and min_pt == 0 and max_pt == 0:
+        analysis["warnings"].append("Sin restricciones Min/Max SL/PT en pips. Puede generar estrategias con SL/PT extremos.")
+    else:
+        if min_sl > 0:
+            analysis["info"].append(f"MinSL={min_sl} pips")
+        if max_sl > 0:
+            analysis["info"].append(f"MaxSL={max_sl} pips")
+        if min_pt > 0:
+            analysis["info"].append(f"MinPT={min_pt} pips")
+        if max_pt > 0:
+            analysis["info"].append(f"MaxPT={max_pt} pips")
+    
+    # Session
+    session = opts.get("Session", "No Session")
+    if session == "No Session":
+        analysis["info"].append("Sin filtro de sesión — opera 24h.")
+    else:
+        analysis["info"].append(f"Session: {session}")
+    
+    # Picker Max Open Positions
+    max_short = opts.get("PickerMaxOpenPositionsShort", 0)
+    max_long = opts.get("PickerMaxOpenPositionsLong", 0)
+    if max_short > 5:
+        analysis["warnings"].append(f"PickerMaxOpenPositionsShort={max_short} — muchas posiciones cortas simultáneas (riesgo de correlación).")
+    if max_long > 5:
+        analysis["warnings"].append(f"PickerMaxOpenPositionsLong={max_long} — muchas posiciones largas simultáneas.")
+    analysis["info"].append(f"Max posiciones: Long={max_long}, Short={max_short}")
+    
+    # Realistic Gaps Handling
+    gaps = opts.get("RealisticGapsHandling", False)
+    if gaps:
+        analysis["info"].append("RealisticGapsHandling=true — gaps se manejan realistamente.")
+    else:
+        analysis["warnings"].append("RealisticGapsHandling=false — los gaps pueden no reflejarse en backtest (overoptimista).")
+    
+    # Max Distance From Market
+    max_dist = opts.get("MaxDistanceFromMarket", False)
+    max_dist_pct = opts.get("MaxDistancePct", 0)
+    if max_dist and max_dist_pct > 0:
+        analysis["info"].append(f"MaxDistanceFromMarket={max_dist_pct}%")
+    
+    # Reserved Bars
+    reserved = opts.get("ReservedBars", 0)
+    if reserved > 0:
+        analysis["info"].append(f"ReservedBars={reserved}")
+    
+    return analysis
 
 
 def active_blocks_only(cfg: CfxConfig) -> list[dict]:
