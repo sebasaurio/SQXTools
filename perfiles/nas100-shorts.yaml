@@ -1,0 +1,63 @@
+# Perfil de bloques para StrategyQuant — NAS100 short-only (H1, Exness)
+#
+# Uso:
+#   python -m sqxtools.cli build-sqb --template BlockSettings.sqb \
+#     --profile perfiles/nas100-shorts.yaml -o output/NAS100_shorts.sqb
+#
+# Validar antes de generar:
+#   python -m sqxtools.cli profile --validate perfiles/nas100-shorts.yaml \
+#     --template BlockSettings.sqb
+#
+# Todos los nombres deben existir en el catálogo del .sqb origen.
+# Verificá con: python -m sqxtools.cli catalog --template BlockSettings.sqb
+
+name: nas100-shorts
+description: Short-only NAS100 H1 — tendencia + momentum + volatilidad
+symbol: NAS100
+timeframe: H1
+
+# Señales de entrada (confirmación de tendencia bajista y momentum)
+signals:
+  - SuperTrendDownTrend
+  - IsDowntrend
+  - RSIFalling
+  - MACDSignalFalling
+  - ADXHigher
+  - ATRRising
+  - BBUpperFalling
+
+# Indicadores de confirmación, precios y operadores
+# (en StrategyQuant los bloques Prices.* y los operadores viven en la
+#  categoría "indicators")
+indicators:
+  - Indicators.RSI
+  - Indicators.MACD
+  - Indicators.ATR
+  - Indicators.ADX
+  - Prices.Close
+  - Prices.High
+  - Prices.Low
+  - IsGreater
+  - IsLower
+  - CrossesAbove
+  - CrossesBelow
+
+# Niveles de stop / target
+stopLimitBlocks:
+  - Stop/Limit Price Levels.BollingerBands
+  - Stop/Limit Price Levels.SuperTrend
+  - Stop/Limit Price Levels.SMA
+  - Stop/Limit Price Ranges.ATR
+
+# Tipos de entrada
+order_types:
+  - EnterAtStop
+  - EnterAtLimit
+
+# Tipos de salida
+exit_types:
+  - ExitAfterBars.ExitAfterBars
+  - MoveSL2BE.MoveSL2BE
+  - ProfitTarget.ProfitTarget
+  - StopLoss.StopLoss
+  - TrailingStop.TrailingStop

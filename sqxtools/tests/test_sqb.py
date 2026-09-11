@@ -13,10 +13,15 @@ import pytest
 from sqxtools.sqb_parser import parse_sqb, get_block_summary
 from sqxtools.sqb_builder import (
     build_recommended_sqb,
+    build_from_profile,
     dump_catalog,
     get_block_definition,
     list_blocks,
     load_sqb_template,
+    load_profile,
+    save_profile,
+    validate_selection,
+    diff_sqb,
 )
 
 
@@ -224,6 +229,8 @@ class TestSqbBuilder:
         assert report["not_found"]["signals"] == ["NoExisteEstaSeñal"]
 
     def test_build_disable_rest(self, sqb_file: Path, tmp_path: Path):
+        """Categorías especificadas: se desactivan sus no elegidos. Las no
+        especificadas (None) quedan intactas."""
         out = tmp_path / "rest.sqb"
         report = build_recommended_sqb(
             template_path=sqb_file,
@@ -231,9 +238,39 @@ class TestSqbBuilder:
             use_signals=["RSIFalling"],
             disable_rest=True,
         )
-        assert report["deactivated"] == 4  # los otros 4 bloques
+        # Solo 'signals' fue especificada → se desactiva IsDowntrend (el otro signal)
+        assert report["deactivated"] == 1
         sqb = parse_sqb(out)
-        assert sum(1 for b in sqb.building_blocks if b.use) == 1
+        active = {b.key for b in sqb.building_blocks if b.use}
+        assert active == {"RSIFalling"}
+
+    def test_unspecified_category_left_untouched(self, sqb_file: Path, tmp_path: Path):
+        """Un grupo no especificado (None) NO debe desactivarse."""
+        out = tmp_path / "keep.sqb"
+        build_recommended_sqb(
+            template_path=sqb_file,
+            output_path=out,
+            use_signals=["RSIFalling"],
+            # indicators / stops / order_types / exit_types → None (no tocar)
+        )
+        sqb = parse_sqb(out)
+        # OrderTypes y ExitTypes del template siguen con su valor original (use=false en el fixture)
+        assert len(sqb.order_types) == 2
+        # Los indicadores conservan su estado original
+        atr = next(b for b in sqb.building_blocks if b.key == "Indicators.ATR")
+        assert atr.use is False
+
+    def test_explicit_empty_list_disables_all(self, sqb_file: Path, tmp_path: Path):
+        """Una lista vacía explícita ([]) sí desactiva todo el grupo."""
+        out = tmp_path / "empty.sqb"
+        build_recommended_sqb(
+            template_path=sqb_file,
+            output_path=out,
+            use_signals=["RSIFalling"],
+            use_order_types=[],   # explícito: desactivar todos
+        )
+        sqb = parse_sqb(out)
+        assert all(b.use is False for b in sqb.order_types)
 
     def test_get_block_definition(self, sqb_file: Path):
         d = get_block_definition(sqb_file, "RSIFalling")
@@ -250,3 +287,167 @@ class TestSqbBuilder:
         assert len(catalog) == 5
         signals = dump_catalog(sqb_file, category="signals")
         assert {b["key"] for b in signals} == {"RSIFalling", "IsDowntrend"}
+
+
+# === Tests de validación previa ===
+
+class TestValidateSelection:
+    def test_all_valid(self, sqb_file: Path):
+        issues = validate_selection(
+            sqb_file,
+            signals=["RSIFalling", "IsDowntrend"],
+            indicators=["Indicators.ATR"],
+            stops=["Stop/Limit Price Ranges.ATR"],
+        )
+        assert issues["ok"] is True
+        assert issues["errors"] == []
+        assert issues["valid"]["signals"] == ["IsDowntrend", "RSIFalling"]
+
+    def test_invalid_with_suggestion(self, sqb_file: Path):
+        issues = validate_selection(sqb_file, signals=["RSIFallng"])  # typo
+        assert issues["ok"] is False
+        assert len(issues["errors"]) == 1
+        cat, name, suggestion = issues["errors"][0]
+        assert cat == "signals"
+        assert name == "RSIFallng"
+        assert suggestion == "RSIFalling"
+
+    def test_invalid_without_suggestion(self, sqb_file: Path):
+        issues = validate_selection(sqb_file, signals=["CompletamenteOtraCosa"])
+        cat, name, suggestion = issues["errors"][0]
+        assert suggestion is None
+
+    def test_order_and_exit_types_validated(self, sqb_file: Path):
+        issues = validate_selection(
+            sqb_file,
+            order_types=["EnterAtStop"],
+            exit_types=["StopLoss.StopLoss", "NoExiste"],
+        )
+        assert issues["ok"] is False
+        assert issues["errors"][0][0] == "exitTypes"
+
+    def test_strict_build_aborts(self, sqb_file: Path, tmp_path: Path):
+        out = tmp_path / "no.sqb"
+        with pytest.raises(ValueError, match="RSIFallng"):
+            build_recommended_sqb(
+                template_path=sqb_file,
+                output_path=out,
+                use_signals=["RSIFallng"],
+                strict=True,
+            )
+        assert not out.exists()  # no debe escribir nada
+
+
+# === Tests de diff ===
+
+class TestDiffSqb:
+    def test_diff_detects_activated_and_deactivated(self, sqb_file: Path, tmp_path: Path):
+        new = tmp_path / "nuevo.sqb"
+        build_recommended_sqb(
+            template_path=sqb_file,
+            output_path=new,
+            use_signals=["RSIFalling"],          # activa este
+            use_indicators=["Indicators.ATR"],   # y este
+        )
+        d = diff_sqb(sqb_file, new)
+        assert d["categories"]["signals"]["activated"] == ["RSIFalling"]
+        assert d["categories"]["indicators"]["activated"] == ["Indicators.ATR"]
+        assert d["summary"]["blocks_activated"] == 2
+        assert d["summary"]["has_changes"] is True
+
+    def test_diff_identical_files(self, sqb_file: Path):
+        d = diff_sqb(sqb_file, sqb_file)
+        assert d["summary"]["has_changes"] is False
+        assert d["summary"]["blocks_activated"] == 0
+
+    def test_diff_deactivation(self, sqb_file: Path, tmp_path: Path):
+        # Un .sqb con todo activo
+        full = tmp_path / "full.sqb"
+        build_recommended_sqb(
+            template_path=sqb_file,
+            output_path=full,
+            use_signals=["RSIFalling", "IsDowntrend"],
+            use_indicators=["Indicators.ATR", "Prices.Close"],
+            use_stops=["Stop/Limit Price Ranges.ATR"],
+        )
+        # Y otro que solo mantiene un signal
+        reduced = tmp_path / "reduced.sqb"
+        build_recommended_sqb(
+            template_path=full,
+            output_path=reduced,
+            use_signals=["RSIFalling"],
+        )
+        d = diff_sqb(full, reduced)
+        assert "IsDowntrend" in d["categories"]["signals"]["deactivated"]
+        assert d["categories"]["signals"]["activated"] == []
+
+
+# === Tests de perfiles ===
+
+class TestProfiles:
+    def test_save_and_load_json(self, sqb_file: Path, tmp_path: Path):
+        prof_path = tmp_path / "perfil.json"
+        save_profile(prof_path, {
+            "name": "nas100-shorts",
+            "signals": ["RSIFalling", "IsDowntrend"],
+            "indicators": ["Indicators.ATR"],
+            "stopLimitBlocks": ["Stop/Limit Price Ranges.ATR"],
+        })
+        loaded = load_profile(prof_path)
+        assert loaded["signals"] == ["RSIFalling", "IsDowntrend"]
+        assert loaded["indicators"] == ["Indicators.ATR"]
+        assert loaded["name"] == "nas100-shorts"
+        assert loaded["order_types"] == []  # clave ausente → lista vacía
+
+    def test_load_profile_accepts_comma_string(self, tmp_path: Path):
+        p = tmp_path / "p.json"
+        p.write_text('{"signals": "RSIFalling, IsDowntrend"}', encoding="utf-8")
+        loaded = load_profile(p)
+        assert loaded["signals"] == ["RSIFalling", "IsDowntrend"]
+
+    def test_load_profile_missing_file(self, tmp_path: Path):
+        with pytest.raises(FileNotFoundError):
+            load_profile(tmp_path / "no.json")
+
+    def test_build_from_profile(self, sqb_file: Path, tmp_path: Path):
+        report = build_from_profile(
+            template_path=sqb_file,
+            profile={
+                "signals": ["RSIFalling"],
+                "indicators": ["Indicators.ATR"],
+            },
+            output_path=tmp_path / "from_prof.sqb",
+        )
+        assert report["activated"]["signals"] == ["RSIFalling"]
+        assert report["activated"]["indicators"] == ["Indicators.ATR"]
+
+    def test_build_from_profile_path(self, sqb_file: Path, tmp_path: Path):
+        prof = tmp_path / "p.json"
+        save_profile(prof, {"signals": ["IsDowntrend"]})
+        report = build_from_profile(
+            template_path=sqb_file,
+            profile=prof,
+            output_path=tmp_path / "x.sqb",
+        )
+        assert report["activated"]["signals"] == ["IsDowntrend"]
+
+    def test_profile_roundtrip_via_sqb(self, sqb_file: Path, tmp_path: Path):
+        """Extraer perfil de un .sqb y regenerar otro idéntico en selección."""
+        built = tmp_path / "base.sqb"
+        build_recommended_sqb(
+            template_path=sqb_file,
+            output_path=built,
+            use_signals=["RSIFalling"],
+            use_indicators=["Indicators.ATR"],
+            use_order_types=["EnterAtStop"],
+        )
+        sqb = parse_sqb(built)
+        profile = {
+            "signals": [b.key for b in sqb.building_blocks if b.use and b.category == "signals"],
+            "indicators": [b.key for b in sqb.building_blocks if b.use and b.category == "indicators"],
+            "stopLimitBlocks": [b.key for b in sqb.building_blocks if b.use and b.category == "stopLimitBlocks"],
+            "order_types": [b.key for b in sqb.order_types if b.use],
+            "exit_types": [b.key for b in sqb.exit_types if b.use],
+        }
+        assert profile["signals"] == ["RSIFalling"]
+        assert profile["order_types"] == ["EnterAtStop"]

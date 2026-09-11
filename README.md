@@ -63,20 +63,59 @@ python -m sqxtools.cli catalog --template BlockSettings.sqb --block RSIFalling
 
 # Generar un .sqb recomendado desde el catálogo origen
 # (preserva la firma exacta de parámetros de cada bloque; solo cambia use=true/false)
+# Valida los nombres ANTES de escribir y aborta si alguno no existe en el catálogo.
 python -m sqxtools.cli build-sqb --template BlockSettings.sqb -o salida.sqb \
   --signals "SuperTrendDownTrend,RSIFalling,ADXHigher" \
   --indicators "Indicators.RSI,Indicators.ATR,Prices.Close,IsGreater" \
-  --stops "Stop/Limit Price Ranges.ATR"
+  --stops "Stop/Limit Price Ranges.ATR" \
+  --order-types "EnterAtStop,EnterAtLimit" \
+  --exit-types "StopLoss.StopLoss,ProfitTarget.ProfitTarget"
+
+# Con un perfil guardado (evita pasar listas largas por CLI)
+python -m sqxtools.cli build-sqb --template BlockSettings.sqb \
+  --profile perfiles/nas100-shorts.yaml -o salida.sqb
+
+# Comparar el .sqb actual con el recomendado (qué se activa / desactiva)
+python -m sqxtools.cli diff-sqb actual.sqb recomendado.sqb -o diff.json
+
+# Perfiles de bloques: extraer, guardar, validar
+python -m sqxtools.cli profile --from-sqb actual.sqb -o nas100.yaml
+python -m sqxtools.cli profile --validate nas100.yaml --template BlockSettings.sqb
 
 # Gestionar el cache de datos Parquet
 python -m sqxtools.cli cache --list
 python -m sqxtools.cli cache --clear
 ```
 
-> **Importante:** `build-sqb` usa el `.sqb` origen como plantilla y conserva los 524
+### Perfiles de bloques
+
+Un perfil es un archivo YAML o JSON con la selección de bloques, reutilizable:
+
+```yaml
+name: nas100-shorts
+signals:
+  - SuperTrendDownTrend
+  - IsDowntrend
+  - RSIFalling
+indicators:
+  - Indicators.RSI
+  - Prices.Close
+  - IsGreater
+stopLimitBlocks:
+  - Stop/Limit Price Ranges.ATR
+order_types:
+  - EnterAtStop
+exit_types:
+  - StopLoss.StopLoss
+```
+
+> **Importante:** `build-sqb` usa el `.sqb` origen como plantilla y conserva todos los
 > bloques con su firma exacta de parámetros. StrategyQuant **valida esa firma**: si un
 > bloque tiene un parámetro que no existe en su definición (p. ej. `#Level#` en
 > `RSIFalling`), SQ **no lo marca**. Nunca construyas bloques con parámetros inventados.
+>
+> **Campos omitidos = sin cambios.** Si no pasás `--order-types`, esos bloques conservan
+> su estado original en el `.sqb`. Pasá una lista vacía para desactivarlos explícitamente.
 
 ## Salida JSON — Estructura
 
@@ -243,7 +282,7 @@ SQXTools/
 │   ├── cli.py              # Interfaz CLI
 │   └── tests/
 │       ├── test_parser.py      # Tests del parser .cfx
-│       ├── test_sqb.py         # Tests de .sqb (parser + builder)
+│       ├── test_sqb.py         # Tests de .sqb (parser, builder, validación, diff, perfiles)
 │       ├── test_real_files.py  # Tests con .cfx reales
 │       ├── conftest.py
 │       └── fixtures/           # .cfx de ejemplo

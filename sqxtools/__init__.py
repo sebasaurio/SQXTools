@@ -16,9 +16,15 @@ from .date_optimizer import optimize_date_ranges
 from .sqb_parser import parse_sqb, get_block_summary as sqb_block_summary
 from .sqb_builder import (
     build_recommended_sqb,
+    build_from_profile,
+    validate_selection,
+    diff_sqb,
+    load_profile,
+    save_profile,
     get_block_definition,
     dump_catalog,
     list_blocks,
+    BLOCK_CATEGORIES,
 )
 
 __all__ = [
@@ -48,7 +54,13 @@ __all__ = [
     "parse_sqb",
     "sqb_block_summary",
     "build_recommended_sqb",
+    "build_from_profile",
+    "validate_selection",
+    "diff_sqb",
+    "load_profile",
+    "save_profile",
     "get_block_definition",
     "dump_catalog",
     "list_blocks",
+    "BLOCK_CATEGORIES",
 ]

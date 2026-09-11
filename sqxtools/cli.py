@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+import zipfile
 from pathlib import Path
 
 from .parser import parse_cfx
@@ -12,7 +13,15 @@ from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
 from .date_optimizer import optimize_date_ranges
-from .sqb_builder import build_recommended_sqb, get_block_definition, dump_catalog
+from .sqb_builder import (
+    build_recommended_sqb,
+    get_block_definition,
+    dump_catalog,
+    validate_selection,
+    diff_sqb,
+    load_profile,
+    save_profile,
+)
 
 
 def cmd_parse(args):
@@ -503,40 +512,187 @@ def cmd_build_sqb(args):
             return []
         return [x.strip() for x in s.split(",") if x.strip()]
 
-    signals = parse_list(args.signals)
-    indicators = parse_list(args.indicators)
-    stops = parse_list(args.stops)
-    ot = parse_list(args.order_types)
-    et = parse_list(args.exit_types)
+    # El perfil (YAML/JSON) puede venir solo o complementar los flags explícitos
+    profile: dict = {}
+    if args.profile:
+        try:
+            profile = load_profile(args.profile)
+        except (FileNotFoundError, ValueError, ImportError, json.JSONDecodeError) as e:
+            print(f"ERROR leyendo el perfil: {e}", file=sys.stderr)
+            return 1
+        print(f"✓ Perfil cargado: {args.profile}")
 
-    report = build_recommended_sqb(
-        template_path=template,
-        output_path=args.output or "output/recommended.sqb",
-        use_signals=signals,
-        use_indicators=indicators,
-        use_stops=stops,
-        use_order_types=ot,
-        use_exit_types=et,
+    # None = no especificado → no tocar esos bloques en el .sqb de salida
+    def resolve(cli_val, profile_key):
+        if cli_val:
+            return parse_list(cli_val)
+        return profile.get(profile_key)  # None si tampoco está en el perfil
+
+    signals = resolve(args.signals, "signals")
+    indicators = resolve(args.indicators, "indicators")
+    stops = resolve(args.stops, "stopLimitBlocks")
+    ot = resolve(args.order_types, "order_types")
+    et = resolve(args.exit_types, "exit_types")
+
+    if not any((signals, indicators, stops, ot, et)):
+        print("ERROR: no se especificó ningún bloque (usá --profile o --signals/--indicators/--stops)",
+              file=sys.stderr)
+        return 1
+
+    # Validación previa: nombres inexistentes + sugerencias
+    issues = validate_selection(
+        template,
+        signals=signals,
+        indicators=indicators,
+        stops=stops,
+        order_types=ot,
+        exit_types=et,
     )
+    if issues["errors"]:
+        print("\n⚠ Nombres que no existen en el catálogo de StrategyQuant:", file=sys.stderr)
+        for cat, name, sug in issues["errors"]:
+            hint = f"  → ¿quisiste decir '{sug}'?" if sug else ""
+            print(f"  [{cat}] '{name}'{hint}", file=sys.stderr)
+        if not args.allow_missing:
+            print("\nSe abortó la generación (usá --allow-missing para ignorar).", file=sys.stderr)
+            return 1
+        print("\nSe generará el .sqb ignorando los inválidos (--allow-missing).", file=sys.stderr)
 
-    print(f"✓ .sqb generado → {report['output']}")
-    print()
-    print(f"  Activados {sum(len(v) for v in report['activated'].values())} bloques:")
+    try:
+        report = build_recommended_sqb(
+            template_path=template,
+            output_path=args.output or "output/recommended.sqb",
+            use_signals=signals,
+            use_indicators=indicators,
+            use_stops=stops,
+            use_order_types=ot,
+            use_exit_types=et,
+            strict=not args.allow_missing,
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+    print(f"\n✓ .sqb generado → {report['output']}")
+    print(f"\n  Activados {sum(len(v) for v in report['activated'].values())} bloques:")
     for cat, blocks in report["activated"].items():
-        print(f"    {cat} ({len(blocks)}): {', '.join(blocks)}")
+        if blocks:
+            print(f"    {cat} ({len(blocks)}): {', '.join(blocks)}")
 
     nf = {k: v for k, v in report["not_found"].items() if v}
     if nf:
-        print()
-        print("  ⚠ NO ENCONTRADOS en el catálogo:")
+        print("\n  ⚠ NO ENCONTRADOS:")
         for cat, keys in nf.items():
-            if keys:
-                print(f"    {cat}: {', '.join(keys)}")
+            print(f"    {cat}: {', '.join(keys)}")
 
-    print()
-    print(f"  OrderTypes activos: {[o['key'] for o in report['order_types']]}")
+    print(f"\n  OrderTypes activos: {[o['key'] for o in report['order_types']]}")
     print(f"  ExitTypes activos: {[e['key'] for e in report['exit_types']]}")
     return 0
+
+
+def cmd_diff_sqb(args):
+    """Compara dos .sqb y muestra qué bloques se activan/desactivan."""
+    path_a, path_b = Path(args.input1), Path(args.input2)
+    for p in (path_a, path_b):
+        if not p.exists():
+            print(f"ERROR: no existe {p}", file=sys.stderr)
+            return 1
+
+    try:
+        diff = diff_sqb(path_a, path_b)
+    except (ValueError, zipfile.BadZipFile) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+    out = Path(args.output) if args.output else Path("diff_sqb.json")
+    out.write_text(json.dumps(diff, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+
+    print(f"=== DIFF .sqb: {diff['file_a']}  →  {diff['file_b']} ===")
+    print()
+    for cat, data in diff["categories"].items():
+        if not (data["activated"] or data["deactivated"]):
+            continue
+        print(f"[{cat}] {data['active_before']} → {data['active_after']} activos")
+        if data["activated"]:
+            print(f"  + ACTIVADOS ({len(data['activated'])}): {', '.join(data['activated'])}")
+        if data["deactivated"]:
+            print(f"  - DESACTIVADOS ({len(data['deactivated'])}): {', '.join(data['deactivated'])}")
+        print()
+
+    for label, key in (("OrderTypes", "order_types"), ("ExitTypes", "exit_types")):
+        d = diff[key]
+        if d["activated"] or d["deactivated"]:
+            print(f"[{label}] {d['before']} → {d['after']}")
+            if d["activated"]:
+                print(f"  + {', '.join(d['activated'])}")
+            if d["deactivated"]:
+                print(f"  - {', '.join(d['deactivated'])}")
+            print()
+
+    s = diff["summary"]
+    print(f"Resumen: +{s['blocks_activated']} bloques, -{s['blocks_deactivated']} bloques")
+    if not s["has_changes"]:
+        print("(sin cambios entre ambos archivos)")
+    print(f"\n✓ Diff completo → {out}")
+    return 0
+
+
+def cmd_profile(args):
+    """Crea, muestra o valida un perfil de bloques (YAML/JSON)."""
+    if args.validate:
+        try:
+            profile = load_profile(args.validate)
+        except (FileNotFoundError, ValueError, ImportError, json.JSONDecodeError) as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
+        print(f"Perfil: {args.validate}")
+        for key in ("signals", "indicators", "stopLimitBlocks", "order_types", "exit_types"):
+            items = profile.get(key, [])
+            print(f"  {key} ({len(items)}): {', '.join(items) if items else '—'}")
+
+        if args.template:
+            issues = validate_selection(
+                args.template,
+                signals=profile.get("signals"),
+                indicators=profile.get("indicators"),
+                stops=profile.get("stopLimitBlocks"),
+                order_types=profile.get("order_types"),
+                exit_types=profile.get("exit_types"),
+            )
+            if issues["ok"]:
+                print("\n✓ Todos los bloques existen en el catálogo")
+                return 0
+            print("\n⚠ Nombres inválidos:")
+            for cat, name, sug in issues["errors"]:
+                hint = f"  → ¿quisiste decir '{sug}'?" if sug else ""
+                print(f"  [{cat}] '{name}'{hint}")
+            return 1
+        return 0
+
+    # Crear perfil desde un .sqb existente (sus bloques activos)
+    if args.from_sqb:
+        from .sqb_parser import parse_sqb
+        src = Path(args.from_sqb)
+        if not src.exists():
+            print(f"ERROR: no existe {src}", file=sys.stderr)
+            return 1
+        sqb = parse_sqb(src)
+        profile: dict = {
+            "name": src.stem,
+            "signals": [b.key for b in sqb.building_blocks if b.use and b.category == "signals"],
+            "indicators": [b.key for b in sqb.building_blocks if b.use and b.category == "indicators"],
+            "stopLimitBlocks": [b.key for b in sqb.building_blocks if b.use and b.category == "stopLimitBlocks"],
+            "order_types": [b.key for b in sqb.order_types if b.use],
+            "exit_types": [b.key for b in sqb.exit_types if b.use],
+        }
+        out = save_profile(args.output or "profile.yaml", profile)
+        print(f"✓ Perfil extraído de {src.name} → {out}")
+        for key in ("signals", "indicators", "stopLimitBlocks", "order_types", "exit_types"):
+            print(f"  {key} ({len(profile[key])}): {', '.join(profile[key])}")
+        return 0
+
+    print("ERROR: indicá --validate <perfil> o --from-sqb <archivo.sqb>", file=sys.stderr)
+    return 1
 
 
 def cmd_catalog(args):
@@ -661,12 +817,30 @@ def main(argv: list[str] | None = None) -> int:
     p_build = sub.add_parser("build-sqb", help="Genera .sqb recomendado desde catálogo")
     p_build.add_argument("--template", required=True, help=".sqb origen con catálogo completo")
     p_build.add_argument("-o", "--output", help="Salida .sqb")
-    p_build.add_argument("--signals", help="Señales separadas por coma")
-    p_build.add_argument("--indicators", help="Indicadores separados por coma")
-    p_build.add_argument("--stops", help="Stop/Limit blocks separados por coma")
-    p_build.add_argument("--order-types", help="OrderTypes separados por coma")
-    p_build.add_argument("--exit-types", help="ExitTypes separados por coma")
+    p_build.add_argument("--profile", help="Perfil YAML/JSON con la selección de bloques")
+    p_build.add_argument("--signals", help="Señales separadas por coma (complementa --profile)")
+    p_build.add_argument("--indicators", help="Indicadores separados por coma (complementa --profile)")
+    p_build.add_argument("--stops", help="Stop/Limit blocks separados por coma (complementa --profile)")
+    p_build.add_argument("--order-types", help="OrderTypes separados por coma (complementa --profile)")
+    p_build.add_argument("--exit-types", help="ExitTypes separados por coma (complementa --profile)")
+    p_build.add_argument("--allow-missing", action="store_true",
+                         help="Genera igual aunque haya bloques inválidos (por defecto aborta)")
     p_build.set_defaults(func=cmd_build_sqb)
+
+    # diff-sqb
+    p_diff = sub.add_parser("diff-sqb", help="Compara dos .sqb (activados/desactivados)")
+    p_diff.add_argument("input1", help=".sqb de referencia (actual)")
+    p_diff.add_argument("input2", help=".sqb nuevo (recomendado)")
+    p_diff.add_argument("-o", "--output", help="Salida JSON del diff")
+    p_diff.set_defaults(func=cmd_diff_sqb)
+
+    # profile
+    p_prof = sub.add_parser("profile", help="Crea/valida perfiles de bloques (YAML/JSON)")
+    p_prof.add_argument("--validate", help="Valida un perfil existente")
+    p_prof.add_argument("--from-sqb", help="Extrae el perfil desde un .sqb (sus bloques activos)")
+    p_prof.add_argument("--template", help=".sqb catálogo para validar nombres contra él")
+    p_prof.add_argument("-o", "--output", help="Salida del perfil (default: profile.yaml)")
+    p_prof.set_defaults(func=cmd_profile)
 
     # catalog
     p_cat = sub.add_parser("catalog", help="Lista catálogo de bloques y sus parámetros")
