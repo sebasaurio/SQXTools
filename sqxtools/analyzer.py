@@ -173,6 +173,7 @@ def _analyze_dates(is_from: str, is_to: str, oos_ranges: list[dict]) -> dict[str
         "out_of_sample": oos_ranges,
         "issues": [],
         "warnings": [],
+        "info": [],
     }
     
     # Parsear fechas
@@ -227,7 +228,11 @@ def _analyze_dates(is_from: str, is_to: str, oos_ranges: list[dict]) -> dict[str
     ratio = oos_days / total_days if total_days > 0 else 0
     analysis["is_oos_ratio"] = f"{ratio:.2f}:1"
     
-    if ratio < 0.3:
+    # En walk-forward, OOS cubre el 100% del IS porque los rangos son subconjuntos contiguos
+    # Eso NO es "buena cobertura" — es simplemente cómo funciona walk-forward
+    if len(parsed_ranges) > 1:
+        analysis["info"].append(f"Walk-forward: {len(parsed_ranges)} rangos OOS cubren {ratio*100:.0f}% del IS (subconjuntos contiguos).")
+    elif ratio < 0.3:
         analysis["issues"].append(f"Cobertura OOS muy baja ({ratio*100:.0f}% de IS). Recomendado: al menos 30-50%.")
     elif ratio < 0.5:
         analysis["warnings"].append(f"Cobertura OOS moderada ({ratio*100:.0f}% de IS). Ideal: 50%+.")
@@ -235,25 +240,42 @@ def _analyze_dates(is_from: str, is_to: str, oos_ranges: list[dict]) -> dict[str
         analysis["warnings"].append(f"Buena cobertura OOS ({ratio*100:.0f}% de IS).")
     
     # Detectar si OOS = IS (mismo período, sin separación real)
+    # NOTA: En StrategyQuant, los rangos OOS son subconjuntos del IS para walk-forward.
+    # Es CORRECTO que OOS cubra el 100% del IS si los rangos son subperíodos contiguos.
+    # Solo es problemático si hay un solo rango OOS = IS completo (sin walk-forward real).
     if parsed_ranges:
         oos_start = min(r["from"] for r in parsed_ranges)
         oos_end = max(r["to"] for r in parsed_ranges)
         
-        # Si OOS cubre prácticamente el mismo período que IS
-        if (abs((oos_start - date_from).days) <= 30 and 
-            abs((oos_end - date_to).days) <= 30 and
-            oos_days >= total_days * 0.9):
-            analysis["issues"].append("CRÍTICO: Los rangos OOS cubren prácticamente el MISMO período que el IS. No hay separación real entre IS y OOS — esto invalida la validación. Configure los rangos OOS como subconjuntos del IS o use walk-forward.")
-            # Limpiar warnings engañosos
-            analysis["warnings"] = [w for w in analysis["warnings"] if "cobertura" not in w.lower() and "buena cantidad" not in w.lower()]
-            analysis["warnings"].append("Configure los rangos OOS para que sean subconjuntos del IS (ej. 30-50% del período), no el total.")
+        # Verificar que los rangos OOS estén DENTRO del IS (no se extiendan más allá)
+        oos_beyond_start = (oos_start - date_from).days < -30  # OOS empieza antes que IS
+        oos_beyond_end = (oos_end - date_to).days > 30  # OOS termina después que IS
+        
+        if oos_beyond_start or oos_beyond_end:
+            analysis["issues"].append("Los rangos OOS se extienden más allá del período IS. Los rangos OOS deben ser subconjuntos del IS.")
+        
+        # Detectar si hay un solo rango OOS que cubre todo IS (no es walk-forward)
+        if len(parsed_ranges) == 1 and abs((oos_end - oos_start).days - total_days) <= 30:
+            analysis["warnings"].append("Solo 1 rango OOS cubriendo todo el IS. Para walk-forward real, use múltiples rangos OOS más pequeños.")
+        
+        # Verificar que los rangos OOS sean subconjuntos válidos (no todo el IS)
+        if len(parsed_ranges) > 1:
+            # Múltiples rangos = walk-forward válido
+            analysis["info"].append(f"Walk-forward con {len(parsed_ranges)} rangos OOS dentro del IS — configuración correcta.")
+        elif len(parsed_ranges) == 1 and abs((oos_end - oos_start).days - total_days) > 30:
+            # Un solo rango pero más pequeño que IS = válido pero no walk-forward
+            analysis["info"].append("Rango OOS único dentro del IS. Válido, pero múltiples rangos dan más confianza.")
     
-    # Detectar overlaps entre OOS y IS
+    # Detectar si rangos OOS se extienden más allá del IS (problema real)
+    # En walk-forward, los rangos OOS son subconjuntos del IS — eso es correcto
     for r in parsed_ranges:
-        if r["from"] <= date_to and r["to"] >= date_from:
-            # Solo reportar si no ya se detectó el caso OOS=IS
-            if not any("CRÍTICO" in i for i in analysis["issues"]):
-                analysis["issues"].append(f"Rango OOS {r['from'].strftime('%Y.%m.%d')} - {r['to'].strftime('%Y.%m.%d')} se solapa con IS.")
+        beyond_start = (date_from - r["from"]).days  # >0 si OOS empieza antes que IS
+        beyond_end = (r["to"] - date_to).days  # >0 si OOS termina después que IS
+        
+        if beyond_start > 30:
+            analysis["issues"].append(f"Rango OOS {r['from'].strftime('%Y.%m.%d')} - {r['to'].strftime('%Y.%m.%d')} comienza {beyond_start} días ANTES que el IS.")
+        if beyond_end > 30:
+            analysis["issues"].append(f"Rango OOS {r['from'].strftime('%Y.%m.%d')} - {r['to'].strftime('%Y.%m.%d')} termina {beyond_end} días DESPUÉS que el IS.")
     
     # Detectar gaps entre rangos OOS
     if len(parsed_ranges) > 1:
