@@ -103,3 +103,45 @@ class CfxConfig:
             "resources": self.resources,
             "raw_sections": self.raw_sections,
         }
+
+
+# === Modelos para archivos .sqb (Block Settings) ===
+
+@dataclass
+class SqbParam:
+    """Sección Generated de un bloque."""
+    weight: str = "1"
+    params: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class SqbPredefined:
+    """Sección Predefined de un bloque."""
+    changed: bool = False
+    sets: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class SqbBlock:
+    """Un bloque en el archivo .sqb."""
+    key: str
+    weight: str = "1"
+    use: bool = False
+    category: str = ""
+    indicator_min: str = None
+    indicator_max: str = None
+    generated: SqbParam = None
+    predefined: SqbPredefined = None
+
+
+@dataclass
+class SqbFile:
+    """Modelo canónico de un archivo .sqb."""
+    filename: str = ""
+    block_type: str = "simple"
+    version: str = ""
+    calibration: dict[str, str] = field(default_factory=dict)
+    building_blocks: list[SqbBlock] = field(default_factory=list)
+    order_types: list[SqbBlock] = field(default_factory=list)
+    exit_types: list[SqbBlock] = field(default_factory=list)
+    custom_data: dict[str, str] = field(default_factory=dict)
