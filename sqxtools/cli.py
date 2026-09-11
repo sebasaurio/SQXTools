@@ -181,9 +181,14 @@ def cmd_edge_finder(args):
     if vol is not None:
         print(f"  Volatilidad promedio: {vol:.3f}%")
 
-    hours = analysis.get("sessions", {}).get("best_trading_hours") or []
-    if hours:
-        print(f"  Mejores horas para shorts: {[h.get('hour') for h in hours]}")
+    hourly = analysis.get("sessions", {}).get("hourly_analysis") or {}
+    if hourly.get("hours"):
+        vol = sorted(hourly["hours"], key=lambda h: -h["avg_range_pct"])[:3]
+        print(f"  Horas más volátiles: {[(h['hour'], h['avg_range_pct']) for h in vol]}")
+        if hourly.get("directional_edge"):
+            print(f"  Sesgo direccional significativo: {[h['hour'] for h in hourly['directional_edge']]}")
+        else:
+            print("  Sin sesgo direccional significativo por hora (ruido) — filtrar por volatilidad, no por dirección")
 
     proposal = analysis.get("builder_proposal", {})
     if proposal.get("signals"):
@@ -334,7 +339,13 @@ def cmd_full_analysis(args):
     print("2. Analizando mercado (Edge Finder)...")
     edge = analyze_market(df, symbol=args.symbol, timeframe=args.timeframe)
     print(f"   ✓ Volatilidad: {edge['volatility']['avg_range_pct']:.3f}%")
-    print(f"   ✓ Mejor hora: {[h['hour'] for h in edge['sessions'].get('best_trading_hours', [])]}")
+    _h = edge['sessions'].get('hourly_analysis', {})
+    _vol = sorted(_h.get('hours', []), key=lambda x: -x['avg_range_pct'])[:3]
+    print(f"   ✓ Horas más volátiles: {[x['hour'] for x in _vol]}")
+    if _h.get('directional_edge_found'):
+        print(f"   ✓ Sesgo direccional significativo: {[x['hour'] for x in _h['directional_edge']]}")
+    else:
+        print("   · Sin sesgo direccional significativo por hora (coherente con azar)")
     
     # Paso 3: Optimizar fechas IS/OOS
     print("3. Optimizando fechas IS/OOS...")

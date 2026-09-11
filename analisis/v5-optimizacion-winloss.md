@@ -51,11 +51,30 @@ Dejar el SL como está (1.5 – 2.5 ATR): si achicás el SL para subir el RRR vo
 `LimitTimeRange = false` → los valores `SignalTimeRangeFrom=30600 / To=54000`
 (**08:30 – 15:00 UTC**) **no tienen efecto**.
 
-- Mejor hora para shorts en NAS100: **14 UTC** (retorno promedio −0.0105%, rango 0.758%)
-- Horas más bajistas: 14, 11, 0 UTC
-- **Acción:** `LimitTimeRange = true`
-- **Afinar a 12:00 – 15:00 UTC** (`43200` – `54000`) → solo las 3 horas de mayor volatilidad
-  y sesgo bajista. Filtrar las horas flojas sube el win rate directamente.
+**Acción:** `LimitTimeRange = true` con ventana **12:00 – 20:00 UTC** (`43200` – `72000`).
+
+> **CORRECCIÓN (importante).** Una versión anterior de este documento proponía
+> aislar 12:00–15:00 UTC por ser "las mejores horas para shorts". **Eso estaba mal
+> fundado.** Al medirlo con rigurosidad:
+>
+> - El **sesgo direccional por hora no es estadísticamente significativo**: de las 24
+>   horas, solo 1 supera p<0.05 (y es la hora 6, con sesgo *alcista*). Es exactamente
+>   lo esperable por azar — es decir, **ruido**. La hora 14, que se citaba como "mejor
+>   para shorts", tiene p=0.40.
+> - Peor: la ventana 12–15 incluía las horas **13 y 15**, que son las dos **más
+>   alcistas** del día en promedio (+0.0165%, +0.0157%).
+> - Lo que **sí** es un patrón robusto es la **volatilidad**:
+>
+> | Ventana | Rango medio | % del día |
+> |---|---|---|
+> | Asia 00–08 UTC | 0.241% | 35.0% |
+> | 12–15 UTC (propuesta anterior) | 0.612% | **17.5%** |
+> | **12–20 UTC (propuesta)** | **0.543%** | **38.9%** |
+> | 00–23 UTC (sin filtro) | 0.369% | 100% |
+>
+> La ventana ampliada conserva el **89% de la volatilidad** de la estrecha pero con
+> **2,2× más oportunidades**. Filtrar por dirección era perseguir ruido; filtrar por
+> volatilidad excluye las horas muertas (00–07 y 21–23 UTC) sin sacrificar trades.
 
 ### 🔴 3. Endurecer las condiciones de entrada
 
@@ -100,7 +119,7 @@ Hoy: `Ret/DD ≥ 1`, `Trades ≥ 100`, `PF ≥ 1.2`, `DD ≤ 12%`
 | PT ATR múltiplo | 2.0 – 4.5 | **1.2 – 2.0** |
 | SL ATR múltiplo | 1.5 – 2.5 | 1.5 – 2.5 (sin cambio) |
 | `LimitTimeRange` | **false** | **true** |
-| Rango horario | 08:30 – 15:00 (inerte) | **12:00 – 15:00 UTC** |
+| Rango horario | 08:30 – 15:00 (inerte) | **12:00 – 20:00 UTC** |
 | `minConditions` | 1 | **3** |
 | `maxConditions` | 2 | 3 |
 | `ProfitFactor` filtro | 1.2 | **1.45** |
@@ -111,9 +130,15 @@ Hoy: `Ret/DD ≥ 1`, `Trades ≥ 100`, `PF ≥ 1.2`, `DD ≤ 12%`
 | `DontTradeOnWeekends` | false | **true** |
 | `ExitAfterBars` prob | 50 | **20** |
 
-**Win rate esperado:** con RRR ~0.8 : 1 y entradas filtradas (3 condiciones + sesión),
-el breakeven baja a ~55% y el genético empieza a seleccionar por win rate.
+**Win rate esperado:** con RRR ~0.8 : 1 y entradas filtradas (3 condiciones + ventana
+líquida), el breakeven baja a ~55% y el genético empieza a seleccionar por win rate.
 Sin acotar el RRR, ningún otro cambio mueve la aguja de verdad.
+
+**Sobre el tamaño de la ventana:** no conviene achicarla más buscando "las mejores horas".
+El sesgo direccional por hora no es significativo en NAS100, así que recortar la ventana
+solo reduce el número de trades sin mejorar la calidad. Si se quiere ser más selectivo,
+conviene hacerlo por **condiciones de entrada** (`minConditions`) o por **volatilidad
+mínima**, no por hora del día.
 
 ## Validación: round-trip por StrategyQuant
 

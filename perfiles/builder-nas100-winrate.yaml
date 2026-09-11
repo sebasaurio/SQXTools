@@ -32,10 +32,18 @@ entries:
 # ── Filtros de operación ──────────────────────────────────────────────────────
 trading:
   # El rango horario ya estaba configurado pero APAGADO (no tenía efecto).
-  # Mejor hora para shorts en NAS100: 14 UTC (12:00–15:00 UTC = 43200–54000).
+  #
+  # CORRECCIÓN: el sesgo direccional por hora NO es estadísticamente significativo
+  # en NAS100 (solo 1 de 24 horas lo es al 5%, y es alcista — lo esperable por azar).
+  # Lo que SÍ es robusto es la VOLATILIDAD: la sesión NY rinde 0.543% de rango
+  # medio vs 0.369% del día completo y 0.241% en Asia.
+  # Por eso NO se aísla "las 3 mejores horas" (eso era ruido): se EXCLUYEN las
+  # horas muertas (00–07 y 21–23 UTC) y se deja operar toda la sesión líquida.
+  #
+  # 12:00–20:00 UTC = 38.9% del día, 0.543% de rango medio (47% sobre el promedio)
   limit_time_range: true    # antes: false
   signal_time_from: 43200   # 12:00 UTC
-  signal_time_to: 54000     # 15:00 UTC
+  signal_time_to: 72000     # 20:00 UTC (coincide con ExitOnFriday)
   max_trades_per_day: 3     # antes: 0 (sin límite)
   dont_trade_weekends: true # antes: false (gap risk)
   exit_on_friday: true      # sin cambio (ya estaba)
