@@ -1,0 +1,58 @@
+"""Serializador del modelo CfxConfig a formatos de salida."""
+
+import json
+from pathlib import Path
+
+from .models import CfxConfig, CfxNode
+
+
+def to_json(cfg: CfxConfig, indent: int = 2) -> str:
+    """Serializa a JSON."""
+    return json.dumps(cfg.to_dict(), indent=indent, ensure_ascii=False, default=str)
+
+
+def to_markdown(cfg: CfxConfig) -> str:
+    """Serializa a Markdown estructurado (legible para IA)."""
+    lines = [
+        f"# {cfg.filename}",
+        f"**Tipo:** {cfg.cfx_type.value}  ",
+        f"**Versión:** {cfg.version or 'n/a'}",
+        "",
+    ]
+    if cfg.metadata:
+        lines.append("## Metadata")
+        for k, v in cfg.metadata.items():
+            lines.append(f"- **{k}:** {v}")
+        lines.append("")
+    if cfg.options:
+        lines.append("## Opciones globales")
+        for o in cfg.options:
+            lines.append(f"- **{o.name}** = `{o.value}` ({o.type})")
+        lines.append("")
+    for n in cfg.nodes:
+        lines.extend(_node_md(n, level=2))
+    return "\n".join(lines)
+
+
+def _node_md(n: CfxNode, level: int) -> list[str]:
+    head = "#" * level
+    lines = [f"{head} {n.tag}{(': ' + n.name) if n.name else ''}"]
+    if n.options:
+        for o in n.options:
+            lines.append(f"- **{o.name}** = `{o.value}` ({o.type})")
+        lines.append("")
+    for c in n.children:
+        lines.extend(_node_md(c, level=level + 1))
+    return lines
+
+
+def save_output(cfg: CfxConfig, out_path: str | Path) -> Path:
+    """Guarda en el formato según la extensión (.json / .md)."""
+    p = Path(out_path)
+    if p.suffix.lower() == ".json":
+        p.write_text(to_json(cfg), encoding="utf-8")
+    elif p.suffix.lower() in (".md", ".markdown"):
+        p.write_text(to_markdown(cfg), encoding="utf-8")
+    else:
+        p.write_text(to_json(cfg), encoding="utf-8")
+    return p

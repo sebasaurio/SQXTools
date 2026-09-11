@@ -1,0 +1,7 @@
+README.md
+setup.py
+sqxtools.egg-info/PKG-INFO
+sqxtools.egg-info/SOURCES.txt
+sqxtools.egg-info/dependency_links.txt
+sqxtools.egg-info/entry_points.txt
+sqxtools.egg-info/top_level.txt

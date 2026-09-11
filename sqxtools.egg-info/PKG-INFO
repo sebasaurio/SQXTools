@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: sqxtools
+Version: 0.1.0
+Summary: Parser de StrategyQuant .cfx — convierte configs en JSON legible para IA
+Author: Sebastian Cardoza
+Requires-Python: >=3.11
+Dynamic: author
+Dynamic: requires-python
+Dynamic: summary

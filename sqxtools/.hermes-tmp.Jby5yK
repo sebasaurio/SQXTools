@@ -1,0 +1,98 @@
+"""Parser de archivos .cfx de StrategyQuant."""
+
+import re
+from pathlib import Path
+from typing import Any
+
+from .models import CfxConfig, CfxNode, CfxOption, CfxType
+
+
+def _infer_cfx_type(text: str, filename: str) -> CfxType:
+    """Infiere el tipo de configuración a partir de marcadores en el texto."""
+    low = text.lower()
+    if "buildingconfig" in low or "building-config" in low:
+        return CfxType.BUILDING_CONFIG
+    if "optimizer" in low and "retester" not in low:
+        return CfxType.OPTIMIZER
+    if "retester" in low:
+        return CfxType.RETESTER
+    if "build" in low and "building" not in low:
+        return CfxType.BUILD
+    if "customproject" in low or "custom-project" in low:
+        return CfxType.CUSTOM_PROJECT
+    if "<info" in low or "strategyinfo" in low:
+        return CfxType.INFO
+    fname = filename.lower()
+    if "building" in fname:
+        return CfxType.BUILDING_CONFIG
+    if "optimizer" in fname:
+        return CfxType.OPTIMIZER
+    if "retester" in fname:
+        return CfxType.RETESTER
+    return CfxType.UNKNOWN
+
+
+def _strip_comments(text: str) -> str:
+    """Quita comentarios estilo // y /* */ si aparecen."""
+    text = re.sub(r"//[^\n]*", "", text)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return text
+
+
+def _parse_value(raw: str) -> tuple[Any, str]:
+    """Interpreta un valor string → (valor, tipo)."""
+    v = raw.strip().strip('"').strip("'")
+    if v.lower() in ("true", "false"):
+        return v.lower() == "true", "bool"
+    if re.fullmatch(r"-?\d+", v):
+        return int(v), "int"
+    if re.fullmatch(r"-?\d+\.\d+", v):
+        return float(v), "float"
+    return v, "string"
+
+
+def parse_cfx(path: str | Path) -> CfxConfig:
+    """Parsea un archivo .cfx y devuelve un CfxConfig."""
+    p = Path(path)
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    clean = _strip_comments(text)
+
+    cfg = CfxConfig(
+        filename=p.name,
+        cfx_type=_infer_cfx_type(clean, p.name),
+    )
+
+    # Detección de versión en el XML raíz
+    m = re.search(r'<.*?version\s*=\s*["\']([^"\']+)["\']', clean)
+    if m:
+        cfg.version = m.group(1)
+
+    # Parseo genérico de nodos <Tag ... /> o <Tag>...</Tag>
+    # Captura atributos como opciones
+    node_re = re.compile(r"<(\w+)([^>]*?)(?:/>|>(.*?)</\1>)", re.DOTALL)
+    attr_re = re.compile(r'(\w+)\s*=\s*["\']([^"\']*)["\']")
+
+    roots: list[CfxNode] = []
+    for tag, attrs, inner in node_re.findall(clean):
+        if tag.lower() in ("?xml", "xml"):
+            continue
+        node = CfxNode(tag=tag)
+        for k, v in attr_re.findall(attrs):
+            val, typ = _parse_value(v)
+            node.options.append(CfxOption(name=k, value=val, type=typ))
+            if k.lower() == "name":
+                node.name = str(val)
+        # Si tiene contenido interno con hijos, recursivo limitado
+        if inner and "<" in inner:
+            for st, sattrs, _ in node_re.findall(inner):
+                child = CfxNode(tag=st, parent=tag)
+                for k, v in attr_re.findall(sattrs):
+                    val, typ = _parse_value(v)
+                    child.options.append(CfxOption(name=k, value=val, type=typ))
+                    if k.lower() == "name":
+                        child.name = str(val)
+                node.children.append(child)
+        roots.append(node)
+
+    cfg.nodes = roots
+    return cfg
