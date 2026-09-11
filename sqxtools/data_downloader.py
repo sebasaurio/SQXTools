@@ -101,6 +101,7 @@ def download_dukascopy(
         "EURGBP": instruments.INSTRUMENT_FX_CROSSES_EUR_GBP,
         "EURJPY": instruments.INSTRUMENT_FX_CROSSES_EUR_JPY,
         "GBPJPY": instruments.INSTRUMENT_FX_CROSSES_GBP_JPY,
+        "NAS100": instruments.INSTRUMENT_IDX_AMERICA_E_NQ_100,
     }
     
     instrument = instrument_map.get(symbol.upper())

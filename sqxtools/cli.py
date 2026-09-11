@@ -12,6 +12,8 @@ from .compare import compare_configs
 from .ai_analyzer import get_system_prompt
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
+from .date_optimizer import optimize_date_ranges
+import pandas as pd
 
 
 def cmd_parse(args):
@@ -280,6 +282,209 @@ def _summary_to_markdown(summary: dict) -> str:
     return "\n".join(lines)
 
 
+
+def cmd_full_analysis(args):
+    """Análisis completo: mercado + builder + propuestas de mejora."""
+    from .analyzer import summarize
+    from .parser import parse_cfx
+    from .edge_analyzer import analyze_market
+    from .date_optimizer import optimize_date_ranges
+    from .data_downloader import download_dukascopy, download_yfinance, load_data
+    
+    print(f"=== ANÁLISIS COMPLETO: {args.symbol} ({args.timeframe}) ===")
+    print(f"  Fuente: {args.source}")
+    if args.cfx:
+        print(f"  Builder actual: {args.cfx}")
+    print()
+    
+    # Paso 1: Descargar datos de mercado
+    print("1. Descargando datos de mercado...")
+    try:
+        if args.source == "dukascopy":
+            tf = args.timeframe.replace("m", "").replace("h", "H")
+            data_path = download_dukascopy(symbol=args.symbol, timeframe=tf)
+        else:
+            tf = args.timeframe.replace("H", "h").replace("M", "m").lower()
+            data_path = download_yfinance(symbol=args.symbol, timeframe=tf, period="2y")
+    except ImportError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR descargando: {e}", file=sys.stderr)
+        return 1
+    
+    df = load_data(data_path)
+    print(f"   ✓ {len(df)} barras cargadas")
+    
+    # Paso 2: Analizar mercado (Edge Finder)
+    print("2. Analizando mercado (Edge Finder)...")
+    edge = analyze_market(df, symbol=args.symbol, timeframe=args.timeframe)
+    print(f"   ✓ Volatilidad: {edge['volatility']['avg_range_pct']:.3f}%")
+    print(f"   ✓ Mejor hora: {[h['hour'] for h in edge['sessions'].get('best_trading_hours', [])]}")
+    
+    # Paso 3: Optimizar fechas IS/OOS
+    print("3. Optimizando fechas IS/OOS...")
+    dates = optimize_date_ranges(df)
+    print(f"   ✓ Regímenes: {len(dates['regimes'])}")
+    print(f"   ✓ Propuestas: {len(dates['proposals'])}")
+    rec = dates.get('recommendation', {})
+    if rec.get('strategy') != 'insufficient_data':
+        print(f"   ✓ Estrategia: {rec['strategy']} (IS: {rec.get('optimal_is_years', 0)}a, OOS: {rec.get('optimal_oos_years', 0)}a)")
+    
+    # Paso 4: Analizar builder actual (si se proporciona)
+    builder_analysis = None
+    if args.cfx:
+        print("4. Analizando builder actual...")
+        try:
+            cfg = parse_cfx(args.cfx)
+            builder_summary = summarize(cfg)
+            builder_analysis = builder_summary
+            print(f"   ✓ Bloques activos: {builder_summary['blocks_summary']['active']}/{builder_summary['blocks_summary']['total']}")
+            print(f"   ✓ Señales: {len(builder_summary.get('indicators', []))}")
+        except Exception as e:
+            print(f"   ⚠ Error analizando .cfx: {e}")
+    
+    # Paso 5: Generar propuesta combinada
+    print("5. Generando propuesta combinada...")
+    proposal = _generate_full_proposal(edge, dates, builder_analysis)
+    
+    # Guardar resultado
+    result = {
+        "symbol": args.symbol,
+        "timeframe": args.timeframe,
+        "edge_finder": edge,
+        "date_optimizer": dates,
+        "builder_analysis": builder_analysis,
+        "proposal": proposal,
+    }
+    
+    out = Path(args.output) if args.output else Path(f"full_analysis_{args.symbol}.json")
+    out.write_text(json.dumps(result, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    
+    print()
+    print("=" * 60)
+    print(f"✓ Análisis completo → {out}")
+    print()
+    print("=== PROPUESTA OPTIMIZADA ===")
+    p = proposal
+    print(f"  Strategy: {p['strategy_type']} / {p['market_sides']}")
+    if p.get('in_sample'):
+        print(f"  IS: {p['in_sample']['from']} → {p['in_sample']['to']}")
+    if p.get('out_of_sample_ranges'):
+        for r in p['out_of_sample_ranges']:
+            print(f"  OOS: {r['from']} → {r['to']}")
+    if p.get('sessions'):
+        print(f"  Sesiones: {p['sessions']}")
+    
+    # Mostrar building blocks organizados por categoría
+    bb = p.get('building_blocks', {})
+    if bb:
+        for cat, blocks in bb.items():
+            if blocks:
+                print(f"  {cat.upper()} ({len(blocks)}):")
+                for b in blocks:
+                    name = b.get('name', '')
+                    reason = b.get('reason', '')
+                    params = b.get('params', {})
+                    if params:
+                        param_str = ', '.join(f"{k}={v}" for k, v in params.items() if v)
+                        print(f"    - {name}: {param_str}")
+                    else:
+                        print(f"    - {name}: {reason}")
+    
+    if p.get('risk'):
+        print(f"  Risk: ${p['risk'].get('fixed_amount', 0)}/trade, {p['risk'].get('drawdown_pct', 0)}% DD")
+    if p.get('improvements'):
+        print()
+        print("  MEJORAS PROPUESTAS:")
+        for imp in p['improvements']:
+            print(f"    - {imp}")
+    
+    return 0
+
+
+def _generate_full_proposal(edge: dict, dates: dict, builder: dict | None) -> dict:
+    """Genera propuesta optimizada combinando edge finder, date optimizer y builder analysis."""
+    proposal = {
+        "strategy_type": "simple",
+        "market_sides": edge.get("builder_proposal", {}).get("market_sides", "short"),
+        "in_sample": None,
+        "out_of_sample_ranges": [],
+        "sessions": edge.get("builder_proposal", {}).get("sessions", []),
+        "building_blocks": {
+            "signals": [],
+            "indicators": [],
+            "stopLimitBlocks": [],
+        },
+        "risk": edge.get("builder_proposal", {}).get("risk", {}),
+        "improvements": [],
+    }
+    
+    # === Fechas IS/OOS ===
+    date_proposals = dates.get("proposals", [])
+    
+    # Preferir walk-forward si está disponible
+    wf_proposal = next((p for p in date_proposals if "Walk-Forward" in p.get("name", "")), None)
+    split_proposal = next((p for p in date_proposals if "Split Simple" in p.get("name", "")), None)
+    
+    if wf_proposal:
+        proposal["in_sample"] = wf_proposal.get("in_sample")
+        proposal["out_of_sample_ranges"] = wf_proposal.get("out_of_sample_ranges", [])
+    elif split_proposal:
+        proposal["in_sample"] = split_proposal.get("in_sample")
+        proposal["out_of_sample_ranges"] = [split_proposal.get("out_of_sample", {})]
+    
+    # === Building blocks propuestos por Edge Finder (organizados) ===
+    edge_blocks = edge.get("builder_proposal", {}).get("building_blocks", {})
+    for cat, blocks in edge_blocks.items():
+        for b in blocks:
+            proposal["building_blocks"][cat].append(b)
+    
+    # === Mejoras respecto al builder actual ===
+    if builder:
+        current_signals = set(i["name"] for i in builder.get("indicators", []))
+        # Combinar todas las señales propuestas de todas las categorías
+        proposed_signals = set()
+        for cat, blocks in proposal.get("building_blocks", {}).items():
+            for b in blocks:
+                proposed_signals.add(b.get("name", ""))
+        
+        # Señales nuevas recomendadas
+        new_signals = proposed_signals - current_signals
+        for s in new_signals:
+            proposal["improvements"].append(f"Añadir señal: {s}")
+        
+        # Señales redundantes en el builder
+        redundant = current_signals - proposed_signals
+        for s in redundant:
+            proposal["improvements"].append(f"Evaluar remover: {s} (no recomendado por análisis de mercado)")
+        
+        # Comparar risk
+        current_risk = builder.get("risk_money_management", {})
+        proposed_risk = proposal.get("risk", {})
+        if current_risk and proposed_risk:
+            current_dd = current_risk.get("risk_management", {}).get("maxDrawdown", "0")
+            proposed_dd = proposed_risk.get("drawdown_pct", 0)
+            if current_dd and int(current_dd) > proposed_dd:
+                proposal["improvements"].append(f"Reducir drawdown de {current_dd}% a {proposed_dd}%")
+        
+        # Comparar SLPT
+        current_slpt = builder.get("what_to_build", {}).get("slpt_options", {})
+        if current_slpt.get("SLRequired") and not current_slpt.get("SLATR"):
+            proposal["improvements"].append("Cambiar SL a ATR-based para mejor adaptación")
+        if current_slpt.get("PTRequired") and not current_slpt.get("PTATR"):
+            proposal["improvements"].append("Cambiar PT a ATR-based para mejor adaptación")
+    else:
+        proposal["improvements"].append("Crear nuevo builder con configuración propuesta")
+    
+    # Añadir recomendaciones de fecha si hay régimen de alta volatilidad
+    high_vol = [r for r in dates.get("regimes", []) if r.get("type") == "high_vol"]
+    if high_vol:
+        proposal["improvements"].append(f"Incluir al menos un período de alta volatilidad en OOS ({len(high_vol)} detectados)")
+    
+    return proposal
+
+
 def cmd_cache(args):
     """Gestiona cache de datos."""
     if args.list:
@@ -357,17 +562,82 @@ def main(argv: list[str] | None = None) -> int:
     p_edge.add_argument("-o", "--output", help="Salida JSON")
     p_edge.set_defaults(func=cmd_edge_finder)
 
+
+    # full-analysis: Edge Finder + Date Optimizer + AI Analyzer combinados
+    p_full = sub.add_parser("full-analysis", help="Análisis completo: mercado + builder + propuestas")
+    p_full.add_argument("--symbol", default="NAS100", help="Símbolo")
+    p_full.add_argument("--timeframe", default="H1", help="Temporalidad")
+    p_full.add_argument("--source", choices=["dukascopy", "yfinance"], default="dukascopy", help="Fuente")
+    p_full.add_argument("--cfx", help="Archivo .cfx actual para comparar (opcional)")
+    p_full.add_argument("-o", "--output", help="Salida JSON")
+    p_full.set_defaults(func=cmd_full_analysis)
+
     # cache
     p_cache = sub.add_parser("cache", help="Gestiona cache de datos")
     p_cache.add_argument("--list", action="store_true", help="Lista archivos en cache")
     p_cache.add_argument("--clear", action="store_true", help="Elimina cache")
     p_cache.set_defaults(func=cmd_cache)
 
+
+    # date-optimizer
+    p_dates = sub.add_parser("date-optimizer", help="Optimiza rangos IS/OOS basados en datos históricos")
+    p_dates.add_argument("--symbol", default="NQ=F", help="Símbolo")
+    p_dates.add_argument("--timeframe", default="60m", help="Temporalidad")
+    p_dates.add_argument("--period", default="2y", help="Período")
+    p_dates.add_argument("--source", choices=["dukascopy", "yfinance"], default="yfinance", help="Fuente")
+    p_dates.add_argument("--is-ratio", type=float, default=0.6, help="Ratio IS (0-1)")
+    p_dates.add_argument("--num-oos", type=int, default=3, help="Períodos OOS para walk-forward")
+    p_dates.add_argument("-o", "--output", help="Salida JSON")
+    p_dates.set_defaults(func=cmd_date_optimizer)
+
     args = ap.parse_args(argv)
     if not args.command:
         ap.print_help()
         return 1
     return args.func(args)
+
+
+
+def cmd_date_optimizer(args):
+    """Optimiza rangos IS/OOS basados en datos históricos."""
+    print(f"Analizando {args.symbol} ({args.timeframe}, {args.period})...")
+    print(f"  Fuente: {args.source}")
+    
+    # Descargar datos
+    try:
+        if args.source == "yfinance":
+            data_path = download_yfinance(symbol=args.symbol, timeframe=args.timeframe, period=args.period)
+        elif args.source == "dukascopy":
+            data_path = download_dukascopy(symbol=args.symbol, timeframe=args.timeframe.replace("m", "").replace("h", "H"))
+    except ImportError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    
+    # Cargar y analizar
+    df = load_data(data_path)
+    analysis = optimize_date_ranges(df, is_ratio=args.is_ratio, num_oos_periods=args.num_oos)
+    
+    # Guardar
+    out = Path(args.output) if args.output else Path(f"date_opt_{args.symbol}_{args.timeframe}.json")
+    out.write_text(json.dumps(analysis, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    
+    # Mostrar resumen
+    print(f"\n✓ Optimización de fechas → {out}")
+    print(f"  Datos: {analysis['data_info']['total_years']} años ({analysis['data_info']['total_bars']} barras)")
+    print(f"  Regímenes detectados: {len(analysis['regimes'])}")
+    print(f"  Propuestas generadas: {len(analysis['proposals'])}")
+    
+    rec = analysis.get('recommendation', {})
+    print(f"\n  Recomendación: {rec.get('strategy', 'N/A')}")
+    print(f"  {rec.get('rationale', '')}")
+    if rec.get('optimal_is_years'):
+        print(f"  IS óptimo: {rec['optimal_is_years']} años")
+        print(f"  OOS óptimo: {rec['optimal_oos_years']} años")
+    
+    return 0
 
 
 if __name__ == "__main__":

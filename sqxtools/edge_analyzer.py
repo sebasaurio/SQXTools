@@ -1,4 +1,10 @@
-"""Edge Analyzer — analiza datos históricos para encontrar ventajas del mercado."""
+"""Edge Analyzer — analiza datos históricos para encontrar ventajas del mercado.
+
+Propuesta de building blocks separada en categorías:
+- signals: Señales de entrada (RSIFalling, ADXHigher, etc.)
+- indicators: Indicadores de confirmación (Indicators.RSI, Indicators.MACD, etc.)
+- stopLimitBlocks: Niveles de stop/target (Stop/Limit Price Levels.RSI, etc.)
+"""
 
 import pandas as pd
 import numpy as np
@@ -7,21 +13,49 @@ from typing import Any
 from datetime import datetime
 
 
+# Mapeo de señales propuestas a categorías y parámetros típicos en StrategyQuant
+SIGNAL_CATALOG = {
+    # Señales (entry signals)
+    "SuperTrendDownTrend": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "10", "#Multiplier#": "3"}},
+    "IsDowntrend": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "20"}},
+    "RSIFalling": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14", "#Level#": "50"}},
+    "MACDSignalFalling": {"category": "signals", "params": {"#Chart#": "Main", "#Fast#": "12", "#Slow#": "26", "#Signal#": "9"}},
+    "MACDMainFalling": {"category": "signals", "params": {"#Chart#": "Main", "#Fast#": "12", "#Slow#": "26"}},
+    "ADXHigher": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14", "#Level#": "25"}},
+    "ATRRising": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14"}},
+    "ATRCrossUp": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14"}},
+    "ATRCrossDown": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14"}},
+    "BollingerBandsOutside": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "20", "#Deviation#": "2"}},
+    "ADXRising": {"category": "signals", "params": {"#Chart#": "Main", "#Period#": "14"}},
+    
+    # Indicadores (confirmation indicators)
+    "Indicators.RSI": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "14"}},
+    "Indicators.MACD": {"category": "indicators", "params": {"#Chart#": "Main", "#Fast#": "12", "#Slow#": "26", "#Signal#": "9"}},
+    "Indicators.ATR": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "14"}},
+    "Indicators.ADX": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "14"}},
+    "Indicators.SuperTrend": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "10", "#Multiplier#": "3"}},
+    "Indicators.BollingerBands": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "20", "#Deviation#": "2"}},
+    "Indicators.EMA": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "20"}},
+    "Indicators.SMA": {"category": "indicators", "params": {"#Chart#": "Main", "#Period#": "50"}},
+    
+    # Stop/Limit Price Levels (niveles de stop/target basados en indicadores)
+    "Stop/Limit Price Levels.RSI": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "14", "#Level#": "30"}},
+    "Stop/Limit Price Levels.MACD": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Fast#": "12", "#Slow#": "26"}},
+    "Stop/Limit Price Levels.ATR": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "14"}},
+    "Stop/Limit Price Levels.SuperTrend": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "10", "#Multiplier#": "3"}},
+    "Stop/Limit Price Levels.BollingerBands": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "20", "#Deviation#": "2"}},
+    "Stop/Limit Price Levels.EMA": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "20"}},
+    "Stop/Limit Price Levels.SMA": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "50"}},
+    "Stop/Limit Price Ranges.ATR": {"category": "stopLimitBlocks", "params": {"#Chart#": "Main", "#Period#": "14"}},
+}
+
+
 def analyze_market(
     df: pd.DataFrame,
     symbol: str = "USATECHIDX",
     timeframe: str = "H1",
 ) -> dict[str, Any]:
-    """Analiza datos históricos y propone configuración óptima de builder.
-    
-    Args:
-        df: DataFrame con columnas timestamp, open, high, low, close, volume
-        symbol: Nombre del símbolo
-        timeframe: Temporalidad
-        
-    Returns:
-        Diccionario con análisis completo y propuestas
-    """
+    """Analiza datos históricos y propone configuración óptima de builder."""
     analysis = {
         "symbol": symbol,
         "timeframe": timeframe,
@@ -33,7 +67,6 @@ def analyze_market(
         "builder_proposal": {},
     }
     
-    # === Info básica ===
     analysis["data_info"] = {
         "total_bars": len(df),
         "date_from": str(df["timestamp"].iloc[0]) if "timestamp" in df.columns else "N/A",
@@ -41,7 +74,6 @@ def analyze_market(
         "avg_close": float(df["close"].mean()),
     }
     
-    # === Volatilidad ===
     df["returns"] = df["close"].pct_change()
     df["range"] = df["high"] - df["low"]
     df["range_pct"] = (df["high"] - df["low"]) / df["close"] * 100
@@ -54,16 +86,13 @@ def analyze_market(
         "atr_14": float(df["range"].rolling(14).mean().iloc[-1]) if len(df) >= 14 else None,
     }
     
-    # === Análisis por hora (sesiones) ===
     if "timestamp" in df.columns:
         df["hour"] = pd.to_datetime(df["timestamp"]).dt.hour
         df["dayofweek"] = pd.to_datetime(df["timestamp"]).dt.dayofweek
         
-        # Volatilidad por hora
         hourly_vol = df.groupby("hour")["range_pct"].agg(["mean", "std", "count"])
         hourly_vol.columns = ["avg_range", "std_range", "count"]
         
-        # Horas más volátiles
         top_hours = hourly_vol.nlargest(5, "avg_range")
         analysis["sessions"] = {
             "most_volatile_hours": [
@@ -77,46 +106,36 @@ def analyze_market(
             "best_trading_hours": _find_best_hours(df),
         }
     
-    # === Patrones de velas ===
     df["body"] = abs(df["close"] - df["open"])
     df["upper_wick"] = df["high"] - df[["open", "close"]].max(axis=1)
     df["lower_wick"] = df[["open", "close"]].min(axis=1) - df["low"]
     df["body_pct"] = df["body"] / (df["high"] - df["low"] + 1e-10) * 100
     
-    # Doji (cuerpo pequeño)
     doji = df[df["body_pct"] < 20]
     analysis["patterns"]["doji_pct"] = round(len(doji) / len(df) * 100, 2)
     
-    # Velas con mecha superior larga (rechazo a subidas - bueno para shorts)
     short_wick = df[df["upper_wick"] > df["body"] * 2]
     analysis["patterns"]["short_rejection_pct"] = round(len(short_wick) / len(df) * 100, 2)
     
-    # Velas con mecha inferior larga (rechazo a bajadas - malo para shorts)
     long_lower = df[df["lower_wick"] > df["body"] * 2]
     analysis["patterns"]["long_lower_wick_pct"] = round(len(long_lower) / len(df) * 100, 2)
     
-    # === Tendencia ===
     df["sma_20"] = df["close"].rolling(20).mean()
     df["sma_50"] = df["close"].rolling(50).mean()
     
-    # Porcentaje de tiempo en tendencia bajista (SMA20 < SMA50)
     if len(df) >= 50:
         downtrend = df[df["sma_20"] < df["sma_50"]]
         analysis["patterns"]["downtrend_pct"] = round(len(downtrend) / len(df) * 100, 2)
     else:
         analysis["patterns"]["downtrend_pct"] = None
     
-    # === Indicadores propuestos ===
     analysis["indicators"] = _propose_indicators(df, analysis)
-    
-    # === Propuesta de builder ===
     analysis["builder_proposal"] = _propose_builder_config(analysis)
     
     return analysis
 
 
 def _find_best_hours(df: pd.DataFrame) -> list[dict]:
-    """Encuentra las mejores horas para operar basado en volatilidad y dirección."""
     if "hour" not in df.columns:
         return []
     
@@ -125,11 +144,7 @@ def _find_best_hours(df: pd.DataFrame) -> list[dict]:
         "returns": ["mean", "count"],
     })
     hourly.columns = ["avg_range", "avg_return", "count"]
-    
-    # Filtrar horas con suficientes datos
     hourly = hourly[hourly["count"] >= 50]
-    
-    # Mejor hora para shorts: alta volatilidad + retorno negativo promedio
     hourly["short_score"] = hourly["avg_range"] * (-hourly["avg_return"].clip(upper=0))
     
     best = hourly.nlargest(3, "short_score")
@@ -140,70 +155,76 @@ def _find_best_hours(df: pd.DataFrame) -> list[dict]:
 
 
 def _propose_indicators(df: pd.DataFrame, analysis: dict) -> dict:
-    """Propone indicadores óptimos basados en el análisis del mercado."""
+    """Propone indicadores organizados por categoría (signals, indicators, stopLimitBlocks)."""
     proposals = {
-        "trend": [],
-        "momentum": [],
-        "volatility": [],
-        "volume": [],
+        "signals": [],
+        "indicators": [],
+        "stopLimitBlocks": [],
     }
     
-    # === Tendencia ===
-    # Si hay tendencia bajista clara, proponer indicadores de continuación
+    # === SIGNALS (señales de entrada) ===
     if analysis["patterns"].get("downtrend_pct", 0) > 55:
-        proposals["trend"].extend([
+        proposals["signals"].extend([
             {"name": "SuperTrendDownTrend", "reason": f"Tendencia bajista dominante ({analysis['patterns']['downtrend_pct']}%)"},
             {"name": "IsDowntrend", "reason": "Confirmación de tendencia"},
-            {"name": "MACDMainFalling", "reason": "Momentum bajista"},
         ])
     else:
-        proposals["trend"].extend([
+        proposals["signals"].extend([
             {"name": "SuperTrendDownTrend", "reason": "Tendencia general del mercado"},
             {"name": "IsDowntrend", "reason": "Confirmación de tendencia"},
         ])
     
-    # === Momentum ===
-    proposals["momentum"].extend([
+    proposals["signals"].extend([
         {"name": "RSIFalling", "reason": "RSI bajando desde zona alta = entrada más segura para shorts"},
         {"name": "MACDSignalFalling", "reason": "Confirmación de momentum bajista"},
     ])
     
-    # Si hay muchos doji, añadir confirmación de volatilidad
     if analysis["patterns"].get("doji_pct", 0) > 10:
-        proposals["momentum"].append(
+        proposals["signals"].append(
             {"name": "ADXHigher", "reason": f"Alta frecuencia de doji ({analysis['patterns']['doji_pct']}%) — ADX confirma fuerza de tendencia"}
         )
     
-    # === Volatilidad ===
-    proposals["volatility"].extend([
+    proposals["signals"].extend([
         {"name": "ATRRising", "reason": "Volatilidad creciente = oportunidades de shorts"},
         {"name": "BollingerBandsOutside", "reason": "Precio fuera de banda bajista = continuación"},
     ])
     
-    # Si la volatilidad es alta, añadir ATR cross
-    if analysis["volatility"].get("avg_range_pct", 0) > 0.5:
-        proposals["volatility"].append(
-            {"name": "ATRCrossUp", "reason": f"Volatilidad alta ({analysis['volatility']['avg_range_pct']:.2f}%) — ATR Cross confirma activación"}
-        )
+    # === INDICATORS (confirmación) ===
+    proposals["indicators"].extend([
+        {"name": "Indicators.RSI", "reason": "RSI para confirmar momentum (14 períodos)"},
+        {"name": "Indicators.MACD", "reason": "MACD para confirmar cruce bajista"},
+        {"name": "Indicators.ATR", "reason": "ATR para medir volatilidad (14 períodos)"},
+        {"name": "Indicators.ADX", "reason": "ADX para confirmar fuerza de tendencia"},
+    ])
+    
+    # === STOP/LIMIT BLOCKS (niveles de stop/target) ===
+    proposals["stopLimitBlocks"].extend([
+        {"name": "Stop/Limit Price Levels.RSI", "reason": "Stop en niveles de RSI (sobrecompra/sobreventa)"},
+        {"name": "Stop/Limit Price Levels.ATR", "reason": "Stop dinámico basado en ATR"},
+        {"name": "Stop/Limit Price Levels.SuperTrend", "reason": "Stop en línea SuperTrend"},
+        {"name": "Stop/Limit Price Ranges.ATR", "reason": "Rango de stop basado en ATR"},
+    ])
     
     return proposals
 
 
 def _propose_builder_config(analysis: dict) -> dict:
-    """Genera propuesta de configuración de builder basada en el análisis."""
+    """Genera propuesta de configuración de builder con bloques organizados por categoría."""
     proposal = {
         "strategy_type": "simple",
         "market_sides": "short",
         "slpt": {},
         "sessions": [],
-        "signals": [],
+        "building_blocks": {
+            "signals": [],
+            "indicators": [],
+            "stopLimitBlocks": [],
+        },
         "risk": {},
         "rankings": {},
     }
     
-    # === SL/PT basado en volatilidad ===
     atr = analysis["volatility"].get("atr_14", 0)
-    avg_range = analysis["volatility"].get("avg_range_pct", 0.5)
     
     if atr > 0:
         proposal["slpt"] = {
@@ -225,24 +246,28 @@ def _propose_builder_config(analysis: dict) -> dict:
             "pt_atr_multiple": 4.0,
         }
     
-    # === Sesiones ===
     best_hours = analysis.get("sessions", {}).get("best_trading_hours", [])
     if best_hours:
         hours = [h["hour"] for h in best_hours]
         proposal["sessions"] = hours
         proposal["session_note"] = f"Mejores horas para shorts: {hours}"
     else:
-        proposal["sessions"] = [8, 9, 13, 14, 15]  # Apertura Londres + NY
+        proposal["sessions"] = [8, 9, 13, 14, 15]
         proposal["session_note"] = "Sesión por defecto: apertura Londres y NY"
     
-    # === Señales propuestas ===
-    signals = []
+    # === Building blocks con parámetros y valores por defecto ===
     for cat, inds in analysis.get("indicators", {}).items():
         for ind in inds:
-            signals.append(ind["name"])
-    proposal["signals"] = signals
+            block = {
+                "name": ind["name"],
+                "reason": ind["reason"],
+                "params": {},
+            }
+            # Buscar parámetros en el catálogo
+            if ind["name"] in SIGNAL_CATALOG:
+                block["params"] = SIGNAL_CATALOG[ind["name"]].get("params", {})
+            proposal["building_blocks"][cat].append(block)
     
-    # === Risk Management ===
     proposal["risk"] = {
         "fixed_amount": 250,
         "max_lots": 3,
@@ -251,7 +276,6 @@ def _propose_builder_config(analysis: dict) -> dict:
         "note": "Risk conservador: $250/trade, max 5 trades/día, 20% drawdown",
     }
     
-    # === Rankings ===
     proposal["rankings"] = {
         "fitness_criteria": "ReturnDDRatio",
         "max_strategies": 1000,
