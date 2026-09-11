@@ -10,7 +10,7 @@ from .serializer import save_output, to_json, to_markdown
 from .analyzer import summarize, active_blocks_only, blocks_by_category
 from .compare import compare_configs
 from .ai_analyzer import get_system_prompt
-from .data_downloader import download_dukascopy, download_yfinance, load_data
+from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
 
 
@@ -280,6 +280,28 @@ def _summary_to_markdown(summary: dict) -> str:
     return "\n".join(lines)
 
 
+def cmd_cache(args):
+    """Gestiona cache de datos."""
+    if args.list:
+        files = list_cache()
+        if not files:
+            print("No hay archivos en cache.")
+            return 0
+        print(f"\nArchivos en cache ({len(files)}):")
+        for f in files:
+            size_mb = f.stat().st_size / (1024 * 1024)
+            print(f"  {f.name} ({size_mb:.1f} MB)")
+        return 0
+    
+    if args.clear:
+        n = clear_cache()
+        print(f"✓ {n} archivos eliminados de cache.")
+        return 0
+    
+    print("Usa --list o --clear")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sqxtools",
@@ -334,6 +356,12 @@ def main(argv: list[str] | None = None) -> int:
     p_edge.add_argument("--source", choices=["dukascopy", "yfinance"], default="yfinance", help="Fuente de datos")
     p_edge.add_argument("-o", "--output", help="Salida JSON")
     p_edge.set_defaults(func=cmd_edge_finder)
+
+    # cache
+    p_cache = sub.add_parser("cache", help="Gestiona cache de datos")
+    p_cache.add_argument("--list", action="store_true", help="Lista archivos en cache")
+    p_cache.add_argument("--clear", action="store_true", help="Elimina cache")
+    p_cache.set_defaults(func=cmd_cache)
 
     args = ap.parse_args(argv)
     if not args.command:

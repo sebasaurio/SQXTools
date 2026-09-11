@@ -1,4 +1,8 @@
-"""Data Downloader — descarga datos históricos de Dukascopy y yfinance."""
+"""Data Downloader — descarga datos históricos de Dukascopy y yfinance.
+
+Los datos se guardan en formato Parquet (compresión columnar) para lectura rápida.
+Se usa cache: si el archivo ya existe, no se descarga de nuevo.
+"""
 
 import csv
 import io
@@ -19,6 +23,7 @@ def download_dukascopy(
     start: str = "2020-01-01",
     end: str = None,
     output_dir: str = "./data",
+    force_download: bool = False,
 ) -> Path:
     """Descarga datos históricos de Dukascopy (gratis).
     
@@ -28,18 +33,26 @@ def download_dukascopy(
         start: Fecha inicio (YYYY-MM-DD)
         end: Fecha fin (YYYY-MM-DD), por defecto hoy
         output_dir: Directorio de salida
+        force_download: Si True, descarga aunque exista cache
         
     Returns:
-        Path al archivo CSV descargado
+        Path al archivo Parquet descargado
     """
     if end is None:
         end = datetime.now().strftime("%Y-%m-%d")
     
-    start_dt = datetime.strptime(start, "%Y-%m-%d")
-    end_dt = datetime.strptime(end, "%Y-%m-%d")
-    
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Cache: nombre del archivo
+    out_path = out_dir / f"{symbol.upper()}_{timeframe}_{start}_{end}.parquet"
+    
+    if out_path.exists() and not force_download:
+        print(f"✓ Cache encontrado: {out_path}")
+        return out_path
+    
+    start_dt = datetime.strptime(start, "%Y-%m-%d")
+    end_dt = datetime.strptime(end, "%Y-%m-%d")
     
     all_bars = []
     current = start_dt
@@ -107,13 +120,19 @@ def download_dukascopy(
         if current.day == 1:
             current = current.replace(day=28)  # Saltar al siguiente mes
     
-    # Guardar CSV
+    # Guardar Parquet
     if all_bars:
         df = pd.DataFrame(all_bars)
         df = df.sort_values("timestamp").reset_index(drop=True)
         
-        out_path = out_dir / f"{symbol.upper()}_{timeframe}_{start}_{end}.csv"
-        df.to_csv(out_path, index=False)
+        # Optimizar tipos de datos para Parquet
+        df["open"] = df["open"].astype("float32")
+        df["high"] = df["high"].astype("float32")
+        df["low"] = df["low"].astype("float32")
+        df["close"] = df["close"].astype("float32")
+        df["volume"] = df["volume"].astype("float32")
+        
+        df.to_parquet(out_path, index=False, compression="snappy")
         print(f"✓ {len(df)} barras descargadas → {out_path}")
         return out_path
     else:
@@ -125,6 +144,7 @@ def download_yfinance(
     timeframe: str = "60m",  # 1m, 5m, 15m, 30m, 60m, 1h
     period: str = "2y",  # 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
     output_dir: str = "./data",
+    force_download: bool = False,
 ) -> Path:
     """Descarga datos históricos de Yahoo Finance (gratis).
     
@@ -133,9 +153,10 @@ def download_yfinance(
         timeframe: Temporalidad (1m, 5m, 15m, 30m, 60m, 1h, 1d)
         period: Período de datos
         output_dir: Directorio de salida
+        force_download: Si True, descarga aunque exista cache
         
     Returns:
-        Path al archivo CSV descargado
+        Path al archivo Parquet descargado
     """
     try:
         import yfinance as yf
@@ -144,6 +165,13 @@ def download_yfinance(
     
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Cache: nombre del archivo
+    out_path = out_dir / f"{symbol.replace('=', '_')}_{timeframe}_{period}.parquet"
+    
+    if out_path.exists() and not force_download:
+        print(f"✓ Cache encontrado: {out_path}")
+        return out_path
     
     ticker = yf.Ticker(symbol)
     df = ticker.history(period=period, interval=timeframe)
@@ -166,15 +194,37 @@ def download_yfinance(
     }
     df = df.rename(columns=col_map)
     
-    out_path = out_dir / f"{symbol.replace('=', '_')}_{timeframe}_{period}.csv"
-    df.to_csv(out_path, index=False)
+    # Optimizar tipos de datos para Parquet
+    df["open"] = df["open"].astype("float32")
+    df["high"] = df["high"].astype("float32")
+    df["low"] = df["low"].astype("float32")
+    df["close"] = df["close"].astype("float32")
+    df["volume"] = df["volume"].astype("float32")
+    
+    df.to_parquet(out_path, index=False, compression="snappy")
     print(f"✓ {len(df)} barras descargadas → {out_path}")
     return out_path
 
 
 def load_data(path: str | Path) -> pd.DataFrame:
-    """Carga datos desde CSV."""
-    df = pd.read_csv(path)
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-    return df
+    """Carga datos desde Parquet (rápido)."""
+    return pd.read_parquet(path)
+
+
+def list_cache(output_dir: str = "./data") -> list[Path]:
+    """Lista archivos en cache."""
+    out_dir = Path(output_dir)
+    if not out_dir.exists():
+        return []
+    return sorted(out_dir.glob("*.parquet"))
+
+
+def clear_cache(output_dir: str = "./data") -> int:
+    """Elimina archivos de cache. Retorna cantidad eliminada."""
+    out_dir = Path(output_dir)
+    if not out_dir.exists():
+        return 0
+    files = list(out_dir.glob("*.parquet"))
+    for f in files:
+        f.unlink()
+    return len(files)
