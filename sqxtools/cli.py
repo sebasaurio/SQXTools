@@ -10,6 +10,7 @@ from .parser import parse_cfx
 from .serializer import save_output
 from .analyzer import summarize
 from .project_parser import parse_project, format_project, project_to_dict
+from .project_checks import inspect_file, check_project, format_findings
 from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
@@ -827,6 +828,22 @@ def cmd_cache(args):
     return 0
 
 
+def cmd_inspect(args):
+    """Inspecciona CUALQUIER archivo SQ (.cfx project/builder, .sqb) y genera el resumen correcto."""
+    inp = Path(args.input)
+    if not inp.exists():
+        print(f"ERROR: no existe {inp}", file=sys.stderr)
+        return 1
+    result = inspect_file(inp)
+    if args.output:
+        out = Path(args.output)
+        out.write_text(json.dumps(result, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        print(f"✓ {inp.name} [{result.get('kind', '?')}] → {out}")
+    else:
+        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
 def cmd_project(args):
     """Parsea un Custom Project (workflow multi-task) a Markdown/JSON."""
     inp = Path(args.input)
@@ -839,6 +856,15 @@ def cmd_project(args):
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
+
+    if getattr(args, "check", False):
+        findings = check_project(proj)
+        print(format_findings(findings))
+        if args.output:
+            Path(args.output).write_text(
+                json.dumps([f.to_dict() for f in findings], indent=2, ensure_ascii=False),
+                encoding="utf-8")
+        return 0 if not any(f.severity == "error" for f in findings) else 2
 
     if args.output:
         out = Path(args.output)
@@ -980,7 +1006,14 @@ def main(argv: list[str] | None = None) -> int:
     p_proj.add_argument("input", help="Archivo .cfx del Custom Project")
     p_proj.add_argument("-o", "--output", help="Salida (.json o .md); sin esto imprime a stdout")
     p_proj.add_argument("--max-tasks", type=int, default=None, help="Limitar tasks detalladas")
+    p_proj.add_argument("--check", action="store_true", help="Valida el workflow (flujo databanks, cross-checks, OOS, loop)")
     p_proj.set_defaults(func=cmd_project)
+
+    # inspect
+    p_ins = sub.add_parser("inspect", help="Detecta el tipo de cualquier archivo SQ y genera el resumen correcto")
+    p_ins.add_argument("input", help="Archivo .cfx o .sqb")
+    p_ins.add_argument("-o", "--output", help="Salida JSON; sin esto imprime a stdout")
+    p_ins.set_defaults(func=cmd_inspect)
 
     p_dates = sub.add_parser("date-optimizer", help="Optimiza rangos IS/OOS basados en datos históricos")
     p_dates.add_argument("--symbol", default="NQ=F", help="Símbolo")
