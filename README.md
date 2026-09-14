@@ -82,6 +82,10 @@ python -m sqxtools.cli diff-sqb actual.sqb recomendado.sqb -o diff.json
 python -m sqxtools.cli build-cfx --template v5.cfx \
   --profile perfiles/builder-nas100-winrate.yaml -o output/v6.cfx
 
+# Ajustes sueltos, sin escribir un perfil (seccion.clave=valor)
+python -m sqxtools.cli build-cfx --template v5.cfx -o v6.cfx \
+  --settings "risk_reward.limit_slpt_rrr=true,entries.min_conditions=2"
+
 # Perfiles de bloques: extraer, guardar, validar
 python -m sqxtools.cli profile --from-sqb actual.sqb -o nas100.yaml
 python -m sqxtools.cli profile --validate nas100.yaml --template BlockSettings.sqb
@@ -95,8 +99,26 @@ python -m sqxtools.cli cache --clear
 
 A diferencia de los perfiles de `.sqb` (selección de bloques), un **perfil de builder**
 cambia los *parámetros de configuración* de un `.cfx` existente — SL/PT, condiciones de
-entrada, filtros horarios, rankings, probabilidades de salida — preservando intacto todo
-lo demás (bloques, recursos, databanks).
+entrada, filtros horarios, rankings, probabilidades de salida **y qué bloques usa** —
+preservando intacto todo lo demás (recursos, databanks).
+
+Secciones del perfil: `risk_reward`, `entries`, `trading`, `rankings`, `exits`, `blocks`.
+Ver `perfiles/README.md` para la diferencia entre los dos tipos de perfil.
+
+#### Activar bloques desde el `.cfx` (crítico)
+
+**El `.sqb` es el catálogo global; el `.cfx` lleva su PROPIA selección de bloques, y es la
+que el builder usa en un build.** Activar una señal solo en el `.sqb` no tiene efecto.
+
+```yaml
+blocks:
+  add_signals: [StochSlowDCrossDown, VortexDowntrend]
+  remove_indicators: [Indicators.RSI]
+  set_signals: [RSIFalling, ADXHigher]   # lista exacta: activa estas y desactiva el resto
+```
+
+Los nombres se validan contra el catálogo del propio `.cfx`; si no existen, el comando
+aborta con una sugerencia de corrección.
 
 ```bash
 python -m sqxtools.cli build-cfx --template v5.cfx \
@@ -311,6 +333,15 @@ SQXTools/
 │       ├── test_real_files.py  # Tests con .cfx reales
 │       ├── conftest.py
 │       └── fixtures/           # .cfx de ejemplo
+├── perfiles/               # perfiles reutilizables (ver perfiles/README.md)
+│   ├── README.md               # ← diferencia entre perfil de bloques y de builder
+│   ├── nas100-shorts.yaml      # bloques: selección base (22 bloques)
+│   ├── blocks-nas100-robustez.yaml  # bloques: 15 señales + indicadores + stops
+│   ├── builder-nas100-winrate.yaml  # builder: subir win/loss ratio (RRR 60-120)
+│   ├── builder-nas100-moretrades.yaml   # builder: más trades
+│   └── builder-nas100-robustez.yaml     # builder: robustez estadística
+├── analisis/               # razonamiento de las optimizaciones
+│   └── v5-optimizacion-winloss.md
 ├── README.md
 ├── .gitignore
 └── setup.py
