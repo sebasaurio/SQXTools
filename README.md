@@ -95,6 +95,20 @@ python -m sqxtools.cli cache --list
 python -m sqxtools.cli cache --clear
 ```
 
+### Custom Projects (workflows multi-task)
+
+Un Custom Project `.cfx` contiene un workflow completo: Builds, Retests con cross-checks,
+Filterings que reparten resultados en databanks, export, y loops con GoToTask.
+
+```bash
+python -m sqxtools.cli project "NASDAQ - SELL - H1.cfx" -o project.md
+python -m sqxtools.cli project "Proyecto.cfx" -o project.json   # estructurado
+```
+
+La salida muestra el workflow en orden, qué cross-check corre cada Retest (cada uno corre
+exactamente uno), a qué databank mueve cada Filtering, los rangos OOS por task y el pipeline
+de robustez completo.
+
 ### Modificar la configuración del builder (`.cfx`)
 
 A diferencia de los perfiles de `.sqb` (selección de bloques), un **perfil de builder**

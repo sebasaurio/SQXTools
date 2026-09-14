@@ -9,6 +9,7 @@ from pathlib import Path
 from .parser import parse_cfx
 from .serializer import save_output
 from .analyzer import summarize
+from .project_parser import parse_project, format_project, project_to_dict
 from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
@@ -826,6 +827,36 @@ def cmd_cache(args):
     return 0
 
 
+def cmd_project(args):
+    """Parsea un Custom Project (workflow multi-task) a Markdown/JSON."""
+    inp = Path(args.input)
+    if not inp.exists():
+        print(f"ERROR: no existe {inp}", file=sys.stderr)
+        return 1
+
+    try:
+        proj = parse_project(inp)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+    if args.output:
+        out = Path(args.output)
+        payload = (json.dumps(project_to_dict(proj), indent=2, ensure_ascii=False, default=str)
+                   if out.suffix.lower() == ".json" else format_project(proj, max_tasks=args.max_tasks))
+        out.write_text(payload, encoding="utf-8")
+        print(f"✓ Project {proj.name!r} → {out}")
+    else:
+        print(format_project(proj, max_tasks=args.max_tasks))
+
+    n_build = len(proj.by_type("Build"))
+    n_retest = len(proj.by_type("Retest"))
+    n_filter = len(proj.by_type("Filtering"))
+    print(f"\n  {len(proj.tasks)} tasks · {n_build} build · {n_retest} retest · {n_filter} filtering"
+          f" · {len(proj.databanks)} databanks", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sqxtools",
@@ -944,6 +975,13 @@ def main(argv: list[str] | None = None) -> int:
 
 
     # date-optimizer
+    # project
+    p_proj = sub.add_parser("project", help="Parsea un Custom Project (workflow multi-task) a Markdown/JSON")
+    p_proj.add_argument("input", help="Archivo .cfx del Custom Project")
+    p_proj.add_argument("-o", "--output", help="Salida (.json o .md); sin esto imprime a stdout")
+    p_proj.add_argument("--max-tasks", type=int, default=None, help="Limitar tasks detalladas")
+    p_proj.set_defaults(func=cmd_project)
+
     p_dates = sub.add_parser("date-optimizer", help="Optimiza rangos IS/OOS basados en datos históricos")
     p_dates.add_argument("--symbol", default="NQ=F", help="Símbolo")
     p_dates.add_argument("--timeframe", default="60m", help="Temporalidad")
