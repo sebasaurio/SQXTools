@@ -180,6 +180,64 @@ def find_data_folder(explicit: str = "") -> str:
     return f"{base}\\{candidates[0][1]}"
 
 
+def detect_mt5_installations() -> dict:
+    """Detecta todas las instalaciones MT5 en Windows: ejecutables, data folders y procesos.
+    Devuelve {"installations": [...], "datafolders": [...], "running": [...]}."""
+    ps = r'''
+$paths = @()
+foreach ($d in (Get-ChildItem "C:\Program Files","C:\Program Files (x86)" -Directory -ErrorAction SilentlyContinue)) {
+  if (Test-Path (Join-Path $d.FullName "terminal64.exe")) { $paths += $d.FullName }
+}
+foreach ($root in @("$env:USERPROFILE\Desktop","$env:USERPROFILE\OneDrive\Desktop","$env:USERPROFILE\Downloads")) {
+  if (Test-Path $root) {
+    Get-ChildItem $root -Recurse -Filter "terminal64.exe" -ErrorAction SilentlyContinue -Depth 4 |
+      ForEach-Object { $paths += $_.Directory.FullName }
+  }
+}
+$df = @()
+$mq = "$env:APPDATA\MetaQuotes\Terminal"
+if (Test-Path $mq) {
+  foreach ($d in (Get-ChildItem $mq -Directory)) {
+    $o = Join-Path $d.FullName "origin.txt"
+    if (Test-Path $o) {
+      $origin = (Get-Content $o -ErrorAction SilentlyContinue) -join ""
+      $has_mql5 = Test-Path (Join-Path $d.FullName "MQL5")
+      $df += [PSCustomObject]@{ hash=$d.Name; origin=$origin; mql5=$has_mql5 }
+    }
+  }
+}
+$proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path -Unique
+"=== INSTALLATIONS ==="
+$paths | Sort-Object -Unique
+"=== DATAFOLDERS ==="
+$df | ForEach-Object { "$($_.hash)|$($_.origin)|$($_.mql5)" }
+"=== RUNNING ==="
+if ($proc) { $proc } else { "none" }
+'''
+    out = _ps(ps)
+    result: dict = {"installations": [], "datafolders": [], "running": []}
+    section = None
+    for line in out.splitlines():
+        line = line.strip()
+        if line == "=== INSTALLATIONS ===":
+            section = "installations"; continue
+        if line == "=== DATAFOLDERS ===":
+            section = "datafolders"; continue
+        if line == "=== RUNNING ===":
+            section = "running"; continue
+        if not line or section is None:
+            continue
+        if section == "datafolders":
+            parts = line.split("|")
+            result["datafolders"].append({
+                "hash": parts[0], "origin": parts[1] if len(parts) > 1 else "",
+                "has_mql5": parts[2].lower() == "true" if len(parts) > 2 else False,
+            })
+        else:
+            result[section].append(line)
+    return result
+
+
 def find_broker_postfix(specs: list[Mt5Spec], requested: list[str]) -> tuple[list[str], str]:
     """Resuelve el sufijo real del broker probando variantes (_exness, m, c, sin sufijo).
     Devuelve (nombres_resueltos, sufijo_detectado)."""

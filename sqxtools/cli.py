@@ -11,7 +11,7 @@ from .serializer import save_output
 from .analyzer import summarize
 from .project_parser import parse_project, format_project, project_to_dict
 from .project_checks import inspect_file, check_project, format_findings
-from .mt5_instruments import sync as mt5_sync, sync_sessions
+from .mt5_instruments import sync as mt5_sync, sync_sessions, detect_mt5_installations
 from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
@@ -932,6 +932,29 @@ def cmd_mt5_sessions(args):
     return 0
 
 
+def cmd_mt5_detect(args):
+    """Detecta todas las instalaciones MT5 en Windows: ejecutables, data folders y procesos vivos."""
+    result = detect_mt5_installations()
+    if args.json_output:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(f"Instalaciones MT5 ({len(result['installations'])}):")
+    for p in result["installations"]:
+        running = " [CORRIENDO]" if p in result["running"] else ""
+        portable = " (portable)" if "Desktop" in p or "Downloads" in p else ""
+        print(f"  • {p}{portable}{running}")
+    print(f"\nData folders ({len(result['datafolders'])}):")
+    for d in result["datafolders"]:
+        origin = d["origin"] or "?"
+        print(f"  • {d['hash'][:12]}… ← {origin}"
+              + ("" if d["has_mql5"] else " (sin MQL5 aún)"))
+    if result["running"]:
+        print(f"\nCorriendo ahora: {', '.join(result['running'])}")
+    print("\nPara usar con mt5-sync/mt5-sessions:")
+    print('  --mt5-path "<ruta de instalación>"  --data-folder "<ruta del data folder>" (opcional)')
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sqxtools",
@@ -1086,6 +1109,11 @@ def main(argv: list[str] | None = None) -> int:
     p_sess.add_argument("--restart-terminal", action="store_true", help="Cerrar y relanzar MT5 con el script")
     p_sess.add_argument("--use-existing-csv", action="store_true", help="Usar CSV de corrida previa")
     p_sess.set_defaults(func=cmd_mt5_sessions)
+
+    # mt5-detect
+    p_det = sub.add_parser("mt5-detect", help="Detecta todas las instalaciones MT5 en Windows")
+    p_det.add_argument("--json", dest="json_output", action="store_true", help="Salida JSON")
+    p_det.set_defaults(func=cmd_mt5_detect)
 
     p_dates = sub.add_parser("date-optimizer", help="Optimiza rangos IS/OOS basados en datos históricos")
     p_dates.add_argument("--symbol", default="NQ=F", help="Símbolo")
