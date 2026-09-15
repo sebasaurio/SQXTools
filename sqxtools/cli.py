@@ -13,6 +13,7 @@ from .project_parser import parse_project, format_project, project_to_dict
 from .project_checks import inspect_file, check_project, format_findings
 from .mt5_instruments import sync as mt5_sync, sync_sessions, detect_mt5_installations
 from .reality_check import reality_check as run_reality_check
+from .results_analyzer import analyze_results
 from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
@@ -966,6 +967,20 @@ def cmd_reality_check(args):
     return 2 if any(f.severity == "error" for f in rep.findings) else 0
 
 
+def cmd_results_analyze(args):
+    """Analiza el CSV de survivors de un build: distribución, margen sobre filtros, embudo."""
+    stages = []
+    for s in args.stages or []:
+        if ":" not in s:
+            print(f"ERROR: --stages espera 'nombre:archivo.csv', recibí {s!r}", file=sys.stderr)
+            return 1
+        name, path = s.split(":", 1)
+        stages.append((name, path))
+    out = analyze_results(args.input, builder_cfx=args.builder or None, stages=stages)
+    print(out)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sqxtools",
@@ -1135,6 +1150,13 @@ def main(argv: list[str] | None = None) -> int:
     p_rc.add_argument("--symbols", default="USTECm", help="Símbolos a verificar, separados por coma")
     p_rc.add_argument("--direction", choices=["short", "long", "both"], default="short")
     p_rc.set_defaults(func=cmd_reality_check)
+
+    # results-analyze
+    p_ra = sub.add_parser("results-analyze", help="Analiza el CSV de survivors de un build de SQX")
+    p_ra.add_argument("input", help="CSV de estrategias exportado de SQX (SaveToFiles/ExportDatabank)")
+    p_ra.add_argument("--builder", default="", help=".cfx del builder (para conocer los umbrales de filtros)")
+    p_ra.add_argument("--stages", nargs="*", default=[], help="Etapas del embudo: 'nombre:archivo.csv' en orden")
+    p_ra.set_defaults(func=cmd_results_analyze)
 
     p_dates = sub.add_parser("date-optimizer", help="Optimiza rangos IS/OOS basados en datos históricos")
     p_dates.add_argument("--symbol", default="NQ=F", help="Símbolo")
