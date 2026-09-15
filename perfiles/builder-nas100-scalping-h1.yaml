@@ -1,0 +1,74 @@
+# Perfil de BUILDER — variante "SCALPING H1" (trades de 1-3 horas)
+#
+# Objetivo: estrategias que resuelven rápido — máximo 1-3 barras H1 por trade,
+# con SL/PT acotados y time-stop obligatorio.
+#
+# Base: output/v8_robustez.cfx  (conserva las 15 señales multi-familia y filtros base)
+#
+# Uso:
+#   python -m sqxtools.cli build-cfx --template output/v8_robustez.cfx \
+#     --profile perfiles/builder-nas100-scalping-h1.yaml -o output/v10_scalping_h1.cfx
+#
+# ⚠️ CONTEXTO DE COSTOS (Exness Standard, spread 112 points):
+#   - PT piso 140 pts = 1.25× el spread: por debajo, el trade nace sin margen neto.
+#   - SL piso 180 pts: tiene que sobrevivir el ruido + spread.
+#   - El PF estructural de este estilo es más bajo que el de v8: los filtros de
+#     calidad se relajan a PF 1.3 / WLR 1.3 por esa razón, NO por bajar el estándar.
+#   - El MC-Retest del project con spread realista va a descartar muchas de estas
+#     strategies. Si el embudo queda en 0, la respuesta es cuenta RAW, no aflojar.
+#
+# 📋 PASOS MANUALES EN SQ después de cargar este .cfx (no automatizados aún):
+#   1. ExitAfterBars: fijar rango de barras a 2-3 (el perfil activa la probabilidad;
+#      el rango min/max de barras vive en el OrderType del template: ya está 5-20,
+#      cámbialo a 2-3 en la UI).
+#   2. Ranking: agregar condición TimeInMarket ≤ 3 barras (columna de duración).
+#   3. SL/PT ATR period: si querés ATR corto (8-16), ajustar Min/MaxSL/PTATRPeriod.
+
+name: nas100-scalping-h1
+description: Trades de 1-3 barras H1, SL/PT acotados, time-stop obligatorio
+
+# ── Riesgo/Beneficio: distancias cortas con pisos por encima del spread ──────
+risk_reward:
+  limit_slpt_rrr: true
+  rrr_from: 55              # PT = 0.55x SL → breakeven 64.5%
+  rrr_to: 85                # PT = 0.85x SL → breakeven 54.1%
+  sl_atr_multiple_min: 0.8  # antes: 1.5 — SL corto pero tocable sin ruido
+  sl_atr_multiple_max: 1.3  # antes: 2.5
+  pt_atr_multiple_min: 0.5  # antes: 1.2
+  pt_atr_multiple_max: 0.9  # antes: 2.0
+  min_sl_pips: 180          # piso duro ≈ 1.6× spread
+  min_pt_pips: 140          # piso duro ≈ 1.25× spread — NADA por debajo
+
+# ── Entradas: confirmación mínima pero real ──────────────────────────────────
+entries:
+  min_conditions: 2         # igual que v8
+  max_conditions: 3
+
+# ── Filtros de operación: solo horas de máxima volatilidad ──────────────────
+# En 3 barras de Asia (rango medio 0.24%) no llegás a ningún lado.
+# La ventana 12-20 UTC (0.543% de rango, 38.9% del día) es donde un trade
+# corto tiene combustible para resolver.
+trading:
+  limit_time_range: true
+  signal_time_from: 43200   # 12:00 UTC
+  signal_time_to: 72000     # 20:00 UTC
+  max_trades_per_day: 10    # rotación alta, es la esencia del estilo
+  dont_trade_weekends: true
+  exit_on_friday: true
+  friday_exit_time: 72000   # 20:00 UTC: ningún trade duerme el finde
+  max_open_positions_short: 3  # más rotación que v8, sigue acotado
+
+# ── Rankings: duración + calidad ajustada a la realidad de costos ────────────
+# TimeInMarket ≤ 3 barras se agrega MANUAL en SQ (ver pasos arriba).
+rankings:
+  fitness: SharpeRatio            # sin cambio: favorece consistencia corta
+  number_of_trades_min: 300       # con trades de 2-3h, muestrear es barato
+  profit_factor_min: 1.3          # antes 1.45: el spread estructural acota el PF
+  win_loss_ratio_min: 1.3         # antes 1.5: con RRR 0.55-0.85, exigir 1.5 vacía el embudo
+  drawdown_pct_max: 12            # sin cambio
+
+# ── Salidas: el time-stop ES el estilo ───────────────────────────────────────
+# Probabilidad 100 = todo trade lleva ExitAfterBars. El rango de barras (2-3)
+# se fija en el OrderType del template — ver pasos manuales.
+exits:
+  exit_after_bars_probability: 100   # antes: 20
