@@ -74,7 +74,7 @@ class TestMargin:
         rows, _ = load_strategies_csv(_write_csv(Path("/tmp/m.csv"), SAMPLE))
         out = margin_over_filters(rows, thr)
         assert any("numberoftrades" in o and "1/2" in o for o in out)
-        assert any("profitfactor" in o and "0/3" in o for o in out)
+        assert any("profitfactor" in o and "0/2" in o for o in out)
 
 
 class TestFunnel:
