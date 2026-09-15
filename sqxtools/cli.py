@@ -11,7 +11,7 @@ from .serializer import save_output
 from .analyzer import summarize
 from .project_parser import parse_project, format_project, project_to_dict
 from .project_checks import inspect_file, check_project, format_findings
-from .mt5_instruments import sync as mt5_sync
+from .mt5_instruments import sync as mt5_sync, sync_sessions
 from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
@@ -912,6 +912,26 @@ def cmd_mt5_sync(args):
     return 0
 
 
+def cmd_mt5_sessions(args):
+    """Exporta las sesiones de trading reales del broker (MT5) y genera el Sessions.xml de SQX."""
+    try:
+        xml_str, warnings = sync_sessions(
+            mt5_path=args.mt5_path, symbols=args.symbols, out_xml=args.output or "",
+            data_folder=args.data_folder or "",
+            restart_terminal=args.restart_terminal,
+            use_existing_csv=args.use_existing_csv)
+    except (RuntimeError, FileNotFoundError, TimeoutError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    for w in warnings:
+        print(f"  ⚠️ {w}")
+    if args.output:
+        print(f"✓ Sessions.xml → {args.output}")
+    else:
+        print(xml_str)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sqxtools",
@@ -1055,6 +1075,17 @@ def main(argv: list[str] | None = None) -> int:
     p_mt5.add_argument("--restart-terminal", action="store_true", help="Cerrar MT5 si está corriendo y relanzarlo con el script")
     p_mt5.add_argument("--use-existing-csv", action="store_true", help="No ejecutar MT5; usar el CSV de una corrida previa")
     p_mt5.set_defaults(func=cmd_mt5_sync)
+
+    # mt5-sessions
+    p_sess = sub.add_parser("mt5-sessions", help="Exporta sesiones de trading reales del broker y genera Sessions.xml de SQX")
+    p_sess.add_argument("--mt5-path", required=True, help="Ruta Windows de MT5")
+    p_sess.add_argument("--symbols", default="USTECm,US30m,US500m,USOILm,UKOILm,XAGUSDm,XAUUSDm,XNGUSDm",
+                        help="Símbolos reales del broker separados por coma")
+    p_sess.add_argument("-o", "--output", default="", help="Dónde guardar el Sessions.xml")
+    p_sess.add_argument("--data-folder", default="", help="Data folder de MT5; si se omite se detecta")
+    p_sess.add_argument("--restart-terminal", action="store_true", help="Cerrar y relanzar MT5 con el script")
+    p_sess.add_argument("--use-existing-csv", action="store_true", help="Usar CSV de corrida previa")
+    p_sess.set_defaults(func=cmd_mt5_sessions)
 
     p_dates = sub.add_parser("date-optimizer", help="Optimiza rangos IS/OOS basados en datos históricos")
     p_dates.add_argument("--symbol", default="NQ=F", help="Símbolo")

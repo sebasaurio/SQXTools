@@ -1,0 +1,93 @@
+<Sessions>
+  <Session name="UKOILm_exness">
+    <Element dayFrom="Mon" dayTo="Mon" timeFrom="00:10" timeTo="20:54" eod="true" />
+    <Element dayFrom="Tue" dayTo="Tue" timeFrom="00:10" timeTo="20:54" eod="true" />
+    <Element dayFrom="Wed" dayTo="Wed" timeFrom="00:10" timeTo="20:54" eod="true" />
+    <Element dayFrom="Thu" dayTo="Thu" timeFrom="00:10" timeTo="20:54" eod="true" />
+    <Element dayFrom="Fri" dayTo="Fri" timeFrom="00:10" timeTo="20:54" eod="true" />
+  </Session>
+  <Session name="US30m_exness">
+    <Element dayFrom="Sun" dayTo="Mon" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Mon" dayTo="Mon" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Mon" dayTo="Tue" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Tue" dayTo="Tue" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Tue" dayTo="Wed" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Wed" dayTo="Wed" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Wed" dayTo="Thu" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Thu" dayTo="Thu" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Thu" dayTo="Fri" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Fri" dayTo="Fri" timeFrom="00:00" timeTo="20:55" eod="true" />
+  </Session>
+  <Session name="US500m_exness">
+    <Element dayFrom="Sun" dayTo="Mon" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Mon" dayTo="Mon" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Mon" dayTo="Tue" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Tue" dayTo="Tue" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Tue" dayTo="Wed" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Wed" dayTo="Wed" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Wed" dayTo="Thu" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Thu" dayTo="Thu" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Thu" dayTo="Fri" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Fri" dayTo="Fri" timeFrom="00:00" timeTo="20:55" eod="true" />
+  </Session>
+  <Session name="USOILm_exness">
+    <Element dayFrom="Sun" dayTo="Mon" timeFrom="22:01" timeTo="00:00" eod="true" />
+    <Element dayFrom="Mon" dayTo="Mon" timeFrom="00:00" timeTo="20:59" eod="true" />
+    <Element dayFrom="Mon" dayTo="Tue" timeFrom="22:01" timeTo="00:00" eod="true" />
+    <Element dayFrom="Tue" dayTo="Tue" timeFrom="00:00" timeTo="20:59" eod="true" />
+    <Element dayFrom="Tue" dayTo="Wed" timeFrom="22:01" timeTo="00:00" eod="true" />
+    <Element dayFrom="Wed" dayTo="Wed" timeFrom="00:00" timeTo="20:59" eod="true" />
+    <Element dayFrom="Wed" dayTo="Thu" timeFrom="22:01" timeTo="00:00" eod="true" />
+    <Element dayFrom="Thu" dayTo="Thu" timeFrom="00:00" timeTo="20:59" eod="true" />
+    <Element dayFrom="Thu" dayTo="Fri" timeFrom="22:01" timeTo="00:00" eod="true" />
+    <Element dayFrom="Fri" dayTo="Fri" timeFrom="00:00" timeTo="20:57" eod="true" />
+  </Session>
+  <Session name="USTECm_exness">
+    <Element dayFrom="Sun" dayTo="Mon" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Mon" dayTo="Mon" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Mon" dayTo="Tue" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Tue" dayTo="Tue" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Tue" dayTo="Wed" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Wed" dayTo="Wed" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Wed" dayTo="Thu" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Thu" dayTo="Thu" timeFrom="00:00" timeTo="21:00" eod="true" />
+    <Element dayFrom="Thu" dayTo="Fri" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Fri" dayTo="Fri" timeFrom="00:00" timeTo="20:55" eod="true" />
+  </Session>
+  <Session name="XAGUSDm_exness">
+    <Element dayFrom="Sun" dayTo="Mon" timeFrom="22:05" timeTo="00:00" eod="true" />
+    <Element dayFrom="Mon" dayTo="Mon" timeFrom="00:00" timeTo="20:58" eod="true" />
+    <Element dayFrom="Mon" dayTo="Tue" timeFrom="22:01" timeTo="00:00" eod="true" />
+    <Element dayFrom="Tue" dayTo="Tue" timeFrom="00:00" timeTo="20:58" eod="true" />
+    <Element dayFrom="Tue" dayTo="Wed" timeFrom="22:01" timeTo="00:00" eod="true" />
+    <Element dayFrom="Wed" dayTo="Wed" timeFrom="00:00" timeTo="20:58" eod="true" />
+    <Element dayFrom="Wed" dayTo="Thu" timeFrom="22:01" timeTo="00:00" eod="true" />
+    <Element dayFrom="Thu" dayTo="Thu" timeFrom="00:00" timeTo="20:58" eod="true" />
+    <Element dayFrom="Thu" dayTo="Fri" timeFrom="22:01" timeTo="00:00" eod="true" />
+    <Element dayFrom="Fri" dayTo="Fri" timeFrom="00:00" timeTo="20:58" eod="true" />
+  </Session>
+  <Session name="XAUUSDm_exness">
+    <Element dayFrom="Sun" dayTo="Mon" timeFrom="22:01" timeTo="00:00" eod="true" />
+    <Element dayFrom="Mon" dayTo="Mon" timeFrom="00:00" timeTo="20:58" eod="true" />
+    <Element dayFrom="Mon" dayTo="Tue" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Tue" dayTo="Tue" timeFrom="00:00" timeTo="20:58" eod="true" />
+    <Element dayFrom="Tue" dayTo="Wed" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Wed" dayTo="Wed" timeFrom="00:00" timeTo="20:58" eod="true" />
+    <Element dayFrom="Wed" dayTo="Thu" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Thu" dayTo="Thu" timeFrom="00:00" timeTo="20:58" eod="true" />
+    <Element dayFrom="Thu" dayTo="Fri" timeFrom="22:00" timeTo="00:00" eod="true" />
+    <Element dayFrom="Fri" dayTo="Fri" timeFrom="00:00" timeTo="20:58" eod="true" />
+  </Session>
+  <Session name="XNGUSDm_exness">
+    <Element dayFrom="Sun" dayTo="Mon" timeFrom="22:10" timeTo="00:00" eod="true" />
+    <Element dayFrom="Mon" dayTo="Mon" timeFrom="00:00" timeTo="20:45" eod="true" />
+    <Element dayFrom="Mon" dayTo="Tue" timeFrom="22:10" timeTo="00:00" eod="true" />
+    <Element dayFrom="Tue" dayTo="Tue" timeFrom="00:00" timeTo="20:45" eod="true" />
+    <Element dayFrom="Tue" dayTo="Wed" timeFrom="22:10" timeTo="00:00" eod="true" />
+    <Element dayFrom="Wed" dayTo="Wed" timeFrom="00:00" timeTo="20:45" eod="true" />
+    <Element dayFrom="Wed" dayTo="Thu" timeFrom="22:10" timeTo="00:00" eod="true" />
+    <Element dayFrom="Thu" dayTo="Thu" timeFrom="00:00" timeTo="20:45" eod="true" />
+    <Element dayFrom="Thu" dayTo="Fri" timeFrom="22:10" timeTo="00:00" eod="true" />
+    <Element dayFrom="Fri" dayTo="Fri" timeFrom="00:00" timeTo="20:44" eod="true" />
+  </Session>
+</Sessions>

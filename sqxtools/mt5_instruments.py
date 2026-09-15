@@ -57,6 +57,45 @@ void OnStart()
 }
 '''
 
+MQ5_SESSIONS = r'''//+------------------------------------------------------------------+
+//| ExportSessionsAuto.mq5 - exporta sesiones de trading (SQX)       |
+//| Generado por SQXTools — no editar a mano                         |
+//+------------------------------------------------------------------+
+void OnStart()
+{
+   string syms[] = {__SYMBOLS__};
+   string days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+   int h = FileOpen("__OUT_CSV__", FILE_WRITE|FILE_CSV|FILE_ANSI, ';');
+   if(h == INVALID_HANDLE) { Print("SQXTOOLS: no se pudo abrir __OUT_CSV__"); return; }
+   FileWrite(h, "symbol","day","session_from","session_to");
+   for(int i=0; i<ArraySize(syms); i++)
+   {
+      string s = syms[i];
+      if(!SymbolSelect(s, true)) { FileWrite(h, s, "NO_EXISTE"); continue; }
+      // Quote sessions = cuando el broker COTIZA; Trade sessions = cuando se puede operar.
+      // SQX modela la disponibilidad con quote sessions (más finas en índices/energía).
+      int n = SymbolsTotal(false);
+      for(int d=0; d<7; d++)
+      {
+         int q = 0;
+         datetime qf, qt;
+         while(SymbolInfoSessionQuote(s, (ENUM_DAY_OF_WEEK)d, q, qf, qt))
+         {
+            long from = (long)qf, to = (long)qt;
+            // from/to son segundos desde 00:00 del día; 86400 = sesión que cruza medianoche
+            FileWrite(h, s, days[d],
+               StringFormat("%02d:%02d", (int)(from/3600), (int)((from%3600)/60)),
+               StringFormat("%02d:%02d", (int)(to/3600), (int)((to%3600)/60)));
+            q++;
+            if(q > 10) break;
+         }
+      }
+   }
+   FileClose(h);
+   Print("SQXTOOLS: sesiones listas en __OUT_CSV__");
+}
+'''
+
 STARTUP_INI = "[StartUp]\nScript=ExportSpecsAuto\n"
 
 
@@ -165,6 +204,65 @@ def find_broker_postfix(specs: list[Mt5Spec], requested: list[str]) -> tuple[lis
 
 
 # ---------------------------------------------------------------- pipeline
+
+def run_mql5_export(mt5_path: str, script_name: str, template: str, csv_name: str,
+                    symbols: list[str], data_folder: str = "", restart_terminal: bool = False,
+                    use_existing_csv: bool = False) -> Path:
+    """Escribe + compila + ejecuta un script MQL5 y devuelve el CSV resultante."""
+    mt5_path = mt5_path.rstrip("\\/")
+    editor = f"{mt5_path}\\MetaEditor64.exe"
+    terminal = f"{mt5_path}\\terminal64.exe"
+    if not _wsl(editor).exists():
+        raise FileNotFoundError(f"MetaEditor64.exe no encontrado en {mt5_path}")
+    df = find_data_folder(data_folder)
+    dfw = _wsl(df)
+    scripts = dfw / "MQL5" / "Scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+
+    sym_list = ", ".join(f'"{s}"' for s in symbols)
+    (scripts / f"{script_name}.mq5").write_text(
+        template.replace("__SYMBOLS__", sym_list).replace("__OUT_CSV__", csv_name),
+        encoding="utf-8")
+
+    clog = scripts / f"{script_name}_compile.log"
+    clog_win = f"{df}\\MQL5\\Scripts\\{script_name}_compile.log"
+    r = _ps(f'''
+Set-Location "{df}\\MQL5\\Scripts"
+$arg = "/compile:{df}\\MQL5\\Scripts\\{script_name}.mq5 /log:{clog_win}"
+$p = Start-Process -FilePath "{editor}" -ArgumentList $arg -Wait -PassThru
+"exit=" + $p.ExitCode
+''')
+    txt = clog.read_bytes().decode("utf-16-le", errors="ignore") if clog.exists() else r
+    m = re.search(r"Result:\s*(\d+) errors?[^,]*,\s*(\d+) warnings?", txt)
+    if not m or m.group(1) != "0":
+        raise RuntimeError(f"Compilación MQL5 falló:\n{txt[-800:]}")
+
+    csv_wsl = dfw / "MQL5" / "Files" / csv_name
+    if use_existing_csv:
+        if not csv_wsl.exists():
+            raise FileNotFoundError(f"use_existing_csv pero no existe {csv_wsl}")
+        return csv_wsl
+
+    if csv_wsl.exists():
+        csv_wsl.unlink()
+    cfg_name = f"sqx_startup_{script_name}.ini"
+    (dfw / "config" / cfg_name).write_text(f"[StartUp]\nScript={script_name}\n", encoding="utf-8")
+    running = _ps('(Get-Process terminal64 -ErrorAction SilentlyContinue) -ne $null').lower()
+    if running == "true":
+        if not restart_terminal:
+            raise RuntimeError(
+                "MT5 está corriendo. Sin --restart-terminal no puedo relanzarlo con el "
+                "script de arranque. Cerrá MT5 y volvé a correr, o usá --restart-terminal.")
+        _ps('Stop-Process -Name terminal64 -Force; Start-Sleep -Seconds 3')
+    _ps(f'Start-Process -FilePath "{terminal}" -ArgumentList "/config:{df}\\config\\{cfg_name}"')
+    deadline = time.time() + 90
+    while time.time() < deadline and not csv_wsl.exists():
+        time.sleep(2)
+    if not csv_wsl.exists():
+        raise TimeoutError(f"El CSV {csv_name} no apareció en 90s (¿corrió el script?)")
+    time.sleep(2)
+    return csv_wsl
+
 
 def sync(mt5_path: str, data_folder: str = "", symbols: str = DEFAULT_SYMBOLS,
          instruments_xml: str = "", out_xml: str = "", restart_terminal: bool = False,
@@ -358,6 +456,55 @@ def compare_with_xml(specs: list[Mt5Spec], instruments_xml: str | Path) -> list[
             if abs(pv - real_pv) / max(real_pv, 1e-9) > 0.01:
                 diffs.append({"symbol": inst, "field": "pointValue", "xml": pv, "broker": round(real_pv, 4)})
     return diffs
+
+
+def sync_sessions(mt5_path: str, symbols: str = DEFAULT_SYMBOLS, out_xml: str = "",
+                  data_folder: str = "", restart_terminal: bool = False,
+                  use_existing_csv: bool = False) -> tuple[str, list[str]]:
+    """Exporta las sesiones de trading reales del broker (MT5) y genera el Sessions.xml
+    de SQX. Devuelve (xml_str, lista_de_warnings)."""
+    warnings: list[str] = []
+    requested = [s.strip() for s in symbols.split(",") if s.strip()]
+    csv_path = run_mql5_export(
+        mt5_path, "ExportSessionsAuto", MQ5_SESSIONS, "sqx_sessions.csv",
+        requested, data_folder=data_folder, restart_terminal=restart_terminal,
+        use_existing_csv=use_existing_csv)
+
+    with open(csv_path, encoding="utf-8", errors="replace") as f:
+        rows = list(csv.DictReader(f, delimiter=";"))
+    sessions: dict[str, list[tuple[str, str, str]]] = {}
+    for r in rows:
+        name = r["symbol"]
+        if len(r) < 2 or r.get("day") == "NO_EXISTE" or r.get("session_from") is None:
+            warnings.append(f"{name}: no existe en el broker")
+            continue
+        sessions.setdefault(name, []).append(
+            (r["day"], r["session_from"], r["session_to"]))
+
+    DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+    def _next(d: str) -> str:
+        return DAYS[(DAYS.index(d) + 1) % 7]
+
+    out = ['<Sessions>']
+    for name in sorted(sessions):
+        out.append(f'  <Session name="{name}_exness">')
+        for day, tf, tt in sessions[name]:
+            # convención SQX (como en sessions.xml oficial): una sesión que termina a
+            # medianoche se expresa con timeTo="00:00" del día SIGUIENTE, no "24:00"
+            if tt == "24:00":
+                out.append(f'    <Element dayFrom="{day}" dayTo="{_next(day)}" '
+                           f'timeFrom="{tf}" timeTo="00:00" eod="true" />')
+            else:
+                out.append(f'    <Element dayFrom="{day}" dayTo="{day}" timeFrom="{tf}" '
+                           f'timeTo="{tt}" eod="true" />')
+        out.append('  </Session>')
+    out.append('</Sessions>')
+    xml_str = "\n".join(out) + "\n"
+    if out_xml:
+        Path(out_xml).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_xml).write_text(xml_str, encoding="utf-8")
+    return xml_str, warnings
 
 
 def parse_prev_xml(instruments_xml: str | Path) -> dict[str, dict]:
