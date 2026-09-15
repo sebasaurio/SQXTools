@@ -14,6 +14,7 @@ from .project_checks import inspect_file, check_project, format_findings
 from .mt5_instruments import sync as mt5_sync, sync_sessions, detect_mt5_installations
 from .reality_check import reality_check as run_reality_check
 from .results_analyzer import analyze_results
+from .round_trip import verify_round_trip
 from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
@@ -981,6 +982,16 @@ def cmd_results_analyze(args):
     return 0
 
 
+def cmd_round_trip(args):
+    """Verifica que los valores que generaste sobrevivieron al round-trip de SQX."""
+    for p in (args.base, args.generated, args.saved):
+        if not Path(p).exists():
+            print(f"ERROR: no existe {p}", file=sys.stderr)
+            return 1
+    print(verify_round_trip(args.base, args.generated, args.saved))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sqxtools",
@@ -1157,6 +1168,13 @@ def main(argv: list[str] | None = None) -> int:
     p_ra.add_argument("--builder", default="", help=".cfx del builder (para conocer los umbrales de filtros)")
     p_ra.add_argument("--stages", nargs="*", default=[], help="Etapas del embudo: 'nombre:archivo.csv' en orden")
     p_ra.set_defaults(func=cmd_results_analyze)
+
+    # round-trip
+    p_rt = sub.add_parser("round-trip", help="Verifica qué valores revirtió SQ tras cargar tu .cfx")
+    p_rt.add_argument("--base", required=True, help=".cfx de origen (antes de tus cambios)")
+    p_rt.add_argument("--generated", required=True, help=".cfx que generaste con build-cfx")
+    p_rt.add_argument("--saved", required=True, help=".cfx guardado por SQ después de cargarlo")
+    p_rt.set_defaults(func=cmd_round_trip)
 
     p_dates = sub.add_parser("date-optimizer", help="Optimiza rangos IS/OOS basados en datos históricos")
     p_dates.add_argument("--symbol", default="NQ=F", help="Símbolo")
