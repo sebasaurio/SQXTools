@@ -15,6 +15,7 @@ from .mt5_instruments import sync as mt5_sync, sync_sessions, detect_mt5_install
 from .reality_check import reality_check as run_reality_check
 from .results_analyzer import analyze_results
 from .round_trip import verify_round_trip
+from .mt5_instruments import detect_mt5_installations as _detect
 from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
@@ -992,6 +993,54 @@ def cmd_round_trip(args):
     return 0
 
 
+def cmd_mt5_bootstrap(args):
+    """Setup completo de un broker nuevo: detecta MT5, exporta specs+sesiones y genera ambos XML."""
+    print("== 1/3 Detectando instalaciones MT5 ==")
+    det = _detect()
+    if not det["installations"]:
+        print("ERROR: no hay instalaciones MT5", file=sys.stderr)
+        return 1
+    mt5_path = args.mt5_path or det["installations"][0]
+    print(f"  usando: {mt5_path}" + (" [CORRIENDO]" if mt5_path in det["running"] else ""))
+    rt = args.restart_terminal or mt5_path in det["running"]
+
+    print("\n== 2/3 Exportando especificaciones (mt5-sync) ==")
+    try:
+        rep = mt5_sync(mt5_path=mt5_path, data_folder=args.data_folder or "",
+                       symbols=args.symbols, instruments_xml=args.instruments_xml or "",
+                       out_xml=args.out_instruments or "",
+                       restart_terminal=rt, skip_run=False)
+    except (RuntimeError, FileNotFoundError, TimeoutError) as e:
+        print(f"ERROR en mt5-sync: {e}", file=sys.stderr)
+        return 1
+    for line in rep.log:
+        print(f"  {line}")
+    if rep.diffs:
+        print(f"  diferencias vs XML previo: {len(rep.diffs)}")
+        for d in rep.diffs:
+            print(f"    ⚠️ {d['symbol']}.{d['field']}: xml={d['xml']} broker={d['broker']}")
+
+    print("\n== 3/3 Exportando sesiones (mt5-sessions) ==")
+    try:
+        real_syms = [s.real_name for s in rep.specs if s.exists] or args.symbols.split(",")
+        xml_sess, warns = sync_sessions(
+            mt5_path=mt5_path, symbols=",".join(real_syms),
+            out_xml=args.out_sessions or "", data_folder=args.data_folder or "",
+            restart_terminal=False, use_existing_csv=False)
+    except (RuntimeError, FileNotFoundError, TimeoutError) as e:
+        print(f"ERROR en mt5-sessions: {e}", file=sys.stderr)
+        return 1
+    for w in warns:
+        print(f"  ⚠️ {w}")
+    if args.out_sessions:
+        print(f"  ✓ Sessions.xml → {args.out_sessions}")
+    if args.out_instruments:
+        print(f"  ✓ Instruments.xml → {args.out_instruments}")
+    print("\nBootstrap completo. Siguiente paso recomendado: reality-check del builder "
+          "contra estos CSV.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sqxtools",
@@ -1175,6 +1224,17 @@ def main(argv: list[str] | None = None) -> int:
     p_rt.add_argument("--generated", required=True, help=".cfx que generaste con build-cfx")
     p_rt.add_argument("--saved", required=True, help=".cfx guardado por SQ después de cargarlo")
     p_rt.set_defaults(func=cmd_round_trip)
+
+    # mt5-bootstrap
+    p_bs = sub.add_parser("mt5-bootstrap", help="Setup completo: detecta MT5 + specs + sesiones → ambos XML")
+    p_bs.add_argument("--mt5-path", default="", help="Ruta de MT5; si se omite usa la primera detectada")
+    p_bs.add_argument("--data-folder", default="", help="Data folder; si se omite se detecta")
+    p_bs.add_argument("--symbols", default="USTECm,US30m,US500m,USOILm,UKOILm,XAGUSDm,XAUUSDm,XNGUSDm")
+    p_bs.add_argument("--instruments-xml", default="", help="Instruments.xml actual (para diff y heredar spreads)")
+    p_bs.add_argument("--out-instruments", default="", help="Salida del Instruments.xml corregido")
+    p_bs.add_argument("--out-sessions", default="", help="Salida del Sessions.xml")
+    p_bs.add_argument("--restart-terminal", action="store_true", help="Cerrar y relanzar MT5")
+    p_bs.set_defaults(func=cmd_mt5_bootstrap)
 
     p_dates = sub.add_parser("date-optimizer", help="Optimiza rangos IS/OOS basados en datos históricos")
     p_dates.add_argument("--symbol", default="NQ=F", help="Símbolo")
