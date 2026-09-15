@@ -12,6 +12,7 @@ from .analyzer import summarize
 from .project_parser import parse_project, format_project, project_to_dict
 from .project_checks import inspect_file, check_project, format_findings
 from .mt5_instruments import sync as mt5_sync, sync_sessions, detect_mt5_installations
+from .reality_check import reality_check as run_reality_check
 from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
@@ -955,6 +956,16 @@ def cmd_mt5_detect(args):
     return 0
 
 
+def cmd_reality_check(args):
+    """Cruza builder/project de SQX con las specs y sesiones reales del broker (MT5)."""
+    rep = run_reality_check(
+        args.input, project_path=args.project or None,
+        specs_csv=args.specs_csv or None, sessions_csv=args.sessions_csv or None,
+        symbols=args.symbols, direction=args.direction)
+    print(rep.render())
+    return 2 if any(f.severity == "error" for f in rep.findings) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sqxtools",
@@ -1114,6 +1125,16 @@ def main(argv: list[str] | None = None) -> int:
     p_det = sub.add_parser("mt5-detect", help="Detecta todas las instalaciones MT5 en Windows")
     p_det.add_argument("--json", dest="json_output", action="store_true", help="Salida JSON")
     p_det.set_defaults(func=cmd_mt5_detect)
+
+    # reality-check
+    p_rc = sub.add_parser("reality-check", help="Cruza builder/project con specs y sesiones reales del broker")
+    p_rc.add_argument("input", help="Archivo .cfx del builder")
+    p_rc.add_argument("--project", default="", help="Custom Project .cfx (para checks de cross-checks)")
+    p_rc.add_argument("--specs-csv", default="", help="CSV de specs del broker (sqx_specs.csv de mt5-sync)")
+    p_rc.add_argument("--sessions-csv", default="", help="CSV de sesiones del broker (sqx_sessions.csv de mt5-sessions)")
+    p_rc.add_argument("--symbols", default="USTECm", help="Símbolos a verificar, separados por coma")
+    p_rc.add_argument("--direction", choices=["short", "long", "both"], default="short")
+    p_rc.set_defaults(func=cmd_reality_check)
 
     p_dates = sub.add_parser("date-optimizer", help="Optimiza rangos IS/OOS basados en datos históricos")
     p_dates.add_argument("--symbol", default="NQ=F", help="Símbolo")
