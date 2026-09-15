@@ -11,6 +11,7 @@ from .serializer import save_output
 from .analyzer import summarize
 from .project_parser import parse_project, format_project, project_to_dict
 from .project_checks import inspect_file, check_project, format_findings
+from .mt5_instruments import sync as mt5_sync
 from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
@@ -883,6 +884,34 @@ def cmd_project(args):
     return 0
 
 
+def cmd_mt5_sync(args):
+    """Exporta specs de MT5 en vivo y genera el Instruments.xml corregido para SQX."""
+    try:
+        rep = mt5_sync(
+            mt5_path=args.mt5_path,
+            data_folder=args.data_folder or "",
+            symbols=args.symbols,
+            instruments_xml=args.instruments_xml or "",
+            out_xml=args.output or "",
+            restart_terminal=args.restart_terminal,
+            skip_run=args.use_existing_csv,
+        )
+    except (RuntimeError, FileNotFoundError, TimeoutError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    for line in rep.log:
+        print(f"  {line}")
+    if rep.diffs:
+        print(f"\nDiferencias XML actual vs broker ({len(rep.diffs)}):")
+        for d in rep.diffs:
+            print(f"  ⚠️ {d['symbol']}.{d['field']}: xml={d['xml']} broker={d['broker']}")
+    n = sum(1 for s in rep.specs if s.exists)
+    print(f"\n✓ {n} símbolos sincronizados")
+    if args.output:
+        print(f"  XML corregido: {args.output}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sqxtools",
@@ -1014,6 +1043,18 @@ def main(argv: list[str] | None = None) -> int:
     p_ins.add_argument("input", help="Archivo .cfx o .sqb")
     p_ins.add_argument("-o", "--output", help="Salida JSON; sin esto imprime a stdout")
     p_ins.set_defaults(func=cmd_inspect)
+
+    # mt5-sync
+    p_mt5 = sub.add_parser("mt5-sync", help="Exporta specs de MT5 en vivo y genera Instruments.xml para SQX")
+    p_mt5.add_argument("--mt5-path", required=True, help="Ruta Windows de MT5 (ej: C:\\Program Files\\MetaTrader 5)")
+    p_mt5.add_argument("--data-folder", default="", help="Data folder de MT5; si se omite se detecta el más reciente")
+    p_mt5.add_argument("--symbols", default="USTECm,US30m,US500m,USOILm,UKOILm,XAGUSDm,XAUUSDm,XNGUSDm",
+                       help="Símbolos base separados por coma (sin sufijo de broker)")
+    p_mt5.add_argument("--instruments-xml", default="", help="Instruments.xml actual de SQX (para comparar y rellenar huecos)")
+    p_mt5.add_argument("-o", "--output", default="", help="Dónde guardar el XML corregido")
+    p_mt5.add_argument("--restart-terminal", action="store_true", help="Cerrar MT5 si está corriendo y relanzarlo con el script")
+    p_mt5.add_argument("--use-existing-csv", action="store_true", help="No ejecutar MT5; usar el CSV de una corrida previa")
+    p_mt5.set_defaults(func=cmd_mt5_sync)
 
     p_dates = sub.add_parser("date-optimizer", help="Optimiza rangos IS/OOS basados en datos históricos")
     p_dates.add_argument("--symbol", default="NQ=F", help="Símbolo")
