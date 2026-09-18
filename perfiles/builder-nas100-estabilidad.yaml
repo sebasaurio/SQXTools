@@ -1,0 +1,110 @@
+# Perfil de BUILDER — NAS100 short-only, orientado a ESTABILIDAD
+#
+# Objetivo: curva de equity LINEAL (RSquared alto, sin escalones). La estabilidad
+# se persigue con más trades repartidos en el tiempo y filtros que exigen calidad
+# SOSTENIDA, no picos.
+#
+# Base: "Build strategies 4.cfx" más reciente (reemplaza el repertorio acumulado
+# por uno curado con evidencia de mercado + databank real).
+#
+# Uso:
+#   python -m sqxtools.cli build-cfx \
+#     --template "Build strategies 4.cfx" \
+#     --profile perfiles/builder-nas100-estabilidad.yaml \
+#     -o output/v9_estabilidad.cfx
+#
+# Cubre TODO lo del builder (incluye período IS/OOS, sampleType y condiciones del
+# genético). Solo queda manual lo que StrategyQuant revierte al guardar:
+#   · ExitAfterBars.probability (type=int) vuelve a 50 → reponerlo en la UI.
+
+name: nas100-estabilidad
+description: NAS100 H1 short-only — curva de equity lineal (RSquared), muestra amplia
+
+# ── Período de datos: IS/OOS honesto ─────────────────────────────────────────
+# Recomendación de `full-analysis` (6,7 años de datos): 60% IS / 40% OOS.
+# El OOS incluye el pico de volatilidad de abr-2025 (12% anualizado).
+# `type: isv` = In-Sample (donde optimiza el GA). Sin `type` = Out-of-Sample.
+data:
+  date_from: "2020-01-01"
+  date_to: "2026-09-16"
+  out_of_sample:
+    - {from: "2020-01-01", to: "2024-01-09", type: "isv"}
+    - {from: "2024-01-09", to: "2026-09-16"}
+
+# ── Bloques: repertorio curado con evidencia ─────────────────────────────────
+# Criterio: señales que aparecen en el top-40 del databank real Y/o que el
+# análisis de mercado (Dukascopy, 39.554 barras H1) respalda.
+# Se RETIRAN los patrones de vela (Doji, BearishEngulfing) y los osciladores
+# redundantes/ruidosos: no aparecían en las estrategias de mejor SQN.
+blocks:
+  remove_signals:
+    - Doji                     # patrón: sin evidencia en el top-40
+    - BearishEngulfing         # patrón: sin evidencia en el top-40
+    - FastVWAPBelowSlowVWAP    # redundante con VWAPFalling
+    - CCIChangesDown           # oscilador redundante (RSI/Stoch ya cubren)
+    - MomFalling               # momentum redundante
+    - ROCCrossesBelowLevel     # redundante
+    - StochSlowDCrossDown      # oscilador redundante
+  add_signals:
+    - VortexDowntrend          # familia propia — la de mejor SQN real (0.98, 834 trades)
+    - VWAPFalling              # contexto intraday — presente en el top-40
+
+# ── Entradas: mínimo de 2 condiciones ────────────────────────────────────────
+# min=1 generó 358 estrategias con SQN medio 0.19 (ruido). Exigir 2 condiciones
+# estructura la regla y produce curvas menos erráticas.
+entries:
+  min_conditions: 2
+  max_conditions: 3
+
+# ── Ventana horaria: por VOLATILIDAD (no por dirección) ──────────────────────
+# El análisis no encontró edge direccional bajista por hora (solo la hora 6,
+# y es alcista). Las horas más volátiles son 13-19 UTC → ventana 12-20 UTC.
+trading:
+  limit_time_range: true
+  signal_time_from: 43200   # 12:00 UTC
+  signal_time_to: 72000     # 20:00 UTC
+  max_trades_per_day: 5     # limita concentración → curva más pareja
+  max_open_positions_short: 4
+  dont_trade_weekends: true
+  exit_on_friday: true
+  friday_exit_time: 72000
+  realistic_gaps_handling: true
+
+# ── Rankings: acá vive la estabilidad ────────────────────────────────────────
+# RSquared es LA métrica de "curva lineal sin escalones": mide qué tan bien se
+# ajusta la curva de equity a una recta. Sharpe penaliza la volatilidad de los
+# retornos. El piso de trades asegura que ambas métricas sean confiables.
+rankings:
+  fitness: SharpeRatio
+  number_of_trades_min: 200
+  profit_factor_min: 1.2
+  win_loss_ratio_min: 0.9
+  rsquared_min: 0.5         # ← palanca principal de estabilidad
+  drawdown_pct_max: 15
+  sample_type: 10           # 10 = solo IS. Evita que el OOS participe de la selección
+
+# ── Genético: alinear la supervivencia del GA con el ranking ─────────────────
+# El GA descarta individuos generación a generación. Si sus condiciones son más
+# flojas que las del ranking, gasta generaciones produciendo estrategias que se
+# descartan al final. Estas condiciones se pedían a mano en la UI.
+genetic:
+  profit_factor_min: 1.1
+  number_of_trades_min: 150
+  avg_bars_in_trade_min: 2
+  sharpe_ratio_min: 0.4
+  return_dd_ratio_min: 0.5
+  win_loss_ratio_min: 0.9
+  rsquared_min: 0.4
+  sample_type: 10
+
+# ── Salidas: menos cortes aleatorios ─────────────────────────────────────────
+# ExitAfterBars al 50% corta trades antes de que SL/PT trabajen, ensuciando la
+# curva. Trailing al 100% genera salidas prematuras en movimientos chicos.
+# NOTA: SQ revierte `probability` de ExitAfterBars (type=int) al 50 al guardar.
+#       Ajustarlo a mano en la UI de SQ.
+exits:
+  exit_after_bars_probability: 20
+  move_sl2be_probability: 50
+  profit_target_probability: 100
+  stop_loss_probability: 100
+  trailing_stop_probability: 80

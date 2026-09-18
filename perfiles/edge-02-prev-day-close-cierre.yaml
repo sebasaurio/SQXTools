@@ -1,0 +1,88 @@
+# Builder generado automáticamente — edge: Cierre del día previo — cierra debajo
+#
+# AÍSLA un único edge para poder probarlo en StrategyQuant. El catálogo de bloques
+# queda reducido a tres: el nivel de referencia, el precio de cierre y el comparador.
+# Con minConditions=1 el generador no puede armar reglas de otra familia.
+#
+# Nivel: cierre del día anterior  (Prices.CloseD)
+# Evidencia medida (NAS100 H1, simulador propio con control de azar):
+#   Exceso +0.0181 R/trade, el más consistente entre mitades (exceso IS +0.009 / OOS +0.035). n=1218, 182/año.
+#
+# ADVERTENCIA: el control de azar de ese mismo análisis da +0.139 R/trade en 12-20 UTC.
+# Varios de estos edges tienen exceso cercano a cero, o sea que su R/trade absoluto es
+# casi todo la expectativa propia del esquema de salida. Este builder sirve para que el
+# motor de StrategyQuant —que es independiente del simulador propio— confirme o refute.
+#
+# Pasos manuales en la UI de SQ (lo que SQ revierte al guardar):
+#   · Verificar el múltiplo del trailing stop (se busca ~1.5 ATR) en las opciones de salida.
+#   · Reponer ExitAfterBars si SQ lo devuelve a 50.
+
+name: 02-prev-day-close-cierre
+description: "NAS100 H1 short-only — edge aislado: Cierre del día previo — cierra debajo"
+
+data:
+  date_from: "2020-01-01"
+  date_to: "2026-09-16"
+  out_of_sample:
+    - {from: "2020-01-01", to: "2024-01-09", type: "isv"}
+    - {from: "2024-01-09", to: "2026-09-16"}
+
+# Sin cap de RRR: el cap 60-120 exige win rates que estos setups (40-44%) no alcanzan.
+# SL 2 ATR con trailing: esquema medido en el análisis.
+risk_reward:
+  limit_slpt_rrr: false
+  sl_atr_multiple_min: 2.0
+  sl_atr_multiple_max: 2.0
+
+# Una sola condición: la entrada ES el quiebre del nivel.
+entries:
+  min_conditions: 1
+  max_conditions: 2
+  min_period: 5
+  max_period: 100
+
+trading:
+  limit_time_range: true
+  signal_time_from: 43200
+  signal_time_to: 72000
+  max_trades_per_day: 1
+  max_open_positions_short: 1
+  dont_trade_weekends: true
+  exit_on_friday: true
+  friday_exit_time: 75600
+
+blocks:
+  # Catálogo reducido: el comparador, el precio y el nivel. Nada más.
+  set_signals: []
+  set_indicators:
+    - IsLower
+    - Prices.Close
+    - Prices.CloseD
+  # Parámetros del nivel FIJADOS: sin esto el generador sortea las horas y el
+  # nivel deja de representar lo que se quiere probar.
+  fixed_params:
+    Prices.CloseD:
+      "#Shift#": 1
+
+# El fitness apunta directo a la métrica que el usuario quiere mejorar.
+rankings:
+  fitness: SQNScore
+  sqn_score_min: 0.5
+  number_of_trades_min: 100
+  profit_factor_min: 1.1
+  win_loss_ratio_min: 0.9
+  rsquared_min: 0.4
+  drawdown_pct_max: 25
+  sample_type: 10
+
+genetic:
+  sqn_score_min: 0.3
+  number_of_trades_min: 80
+  profit_factor_min: 1.05
+  sample_type: 10
+
+exits:
+  stop_loss_probability: 100
+  trailing_stop_probability: 100
+  profit_target_probability: 0
+  exit_after_bars_probability: 100

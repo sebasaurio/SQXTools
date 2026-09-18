@@ -25,6 +25,35 @@ CFX = FIXTURES / "Build strategies 1.cfx"
 pytestmark = pytest.mark.skipif(not CFX.exists(), reason="Sin fixture .cfx real")
 
 
+def _localname(tag: str) -> str:
+    return tag.split("}")[-1]
+
+
+def _find(root, name: str):
+    return next((el for el in root.iter() if _localname(el.tag) == name), None)
+
+
+def _first_child(el, name: str):
+    for child in el:
+        if _localname(child.tag) == name:
+            return child
+    return None
+
+
+def _condition_map(conds) -> dict:
+    """{columna: valor} de las <Condition> activas de un contenedor <Conditions>."""
+    out = {}
+    for c in conds:
+        if _localname(c.tag) != "Condition" or c.get("use") != "true":
+            continue
+        col = next((cv.get("column") for cv in c.iter()
+                    if _localname(cv.tag) == "Column-Value" and cv.get("column")), None)
+        num = next((nv.get("value") for nv in c.iter()
+                    if _localname(nv.tag) == "Numeric-Value"), None)
+        out[col] = num
+    return out
+
+
 @pytest.fixture
 def cfx_file() -> Path:
     return CFX
@@ -251,6 +280,143 @@ class TestBlockActivation:
         assert any("add_señales" in w for w in report["warnings"])
 
 
+class TestGeneticConditions:
+    """Las condiciones del GENÉTICO (<BuildMode>) son distintas de las de Ranking.
+
+    El GA filtra durante la evolución: alinearlas con el ranking evita gastar
+    generaciones en estrategias que se descartan al final.
+    """
+
+    def _bm_conditions(self, root):
+        bm = _find(root, "BuildMode")
+        assert bm is not None, "el .cfx no tiene <BuildMode>"
+        return _first_child(bm, "Conditions")
+
+    def test_activates_existing_and_adds_new(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "gen.cfx"
+        report = apply_builder_profile(cfx_file, out, {
+            "genetic": {
+                "profit_factor_min": 1.1,
+                "number_of_trades_min": 150,
+                "sharpe_ratio_min": 0.4,
+                "return_dd_ratio_min": 0.5,
+                "win_loss_ratio_min": 0.9,
+            }
+        })
+        active = _condition_map(self._bm_conditions(load_cfx_xml(out)))
+        assert active["ProfitFactor"] == "1.1"
+        assert active["NumberOfTrades"] == "150"
+        assert active["SharpeRatio"] == "0.4"    # existía inactiva
+        assert active["ReturnDDRatio"] == "0.5"  # existía inactiva
+        assert active["WinLossRatio"] == "0.9"   # NO existía → slot libre o clon
+        assert "BuildMode.WinLossRatio" in {c["setting"] for c in report["changes"]}
+
+    def test_genetic_does_not_touch_rankings(self, cfx_file: Path, tmp_path: Path):
+        """Crítico: no confundir el <Conditions> de BuildMode con el de Rankings.
+
+        `_find_section(root, "Conditions")` devolvería el de Rankings siempre
+        (es el primero del documento). Si eso pasara, el filtro del genético se
+        aplicaría sobre los filtros de salida y viceversa.
+        """
+        before = _condition_map(_first_child(_find(load_cfx_xml(cfx_file), "Rankings"),
+                                             "Conditions"))
+        out = tmp_path / "gen2.cfx"
+        apply_builder_profile(cfx_file, out, {"genetic": {"win_loss_ratio_min": 0.9}})
+        after = _condition_map(_first_child(_find(load_cfx_xml(out), "Rankings"),
+                                            "Conditions"))
+        assert after == before, "el genético modificó las condiciones de Ranking"
+
+
+class TestSampleWindow:
+    """`sample_type` decide sobre qué muestra se evalúa cada filtro.
+
+    10 = In-Sample · 20 = Out-of-Sample · 127 = IS+OOS combinados.
+    Filtrar en 127 hace que el out-of-sample participe de la selección y deje de
+    ser un juez independiente.
+    """
+
+    def test_ranking_sample_type_set_to_is(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "st.cfx"
+        report = apply_builder_profile(cfx_file, out, {
+            "rankings": {"sample_type": 10}
+        })
+        root = load_cfx_xml(out)
+        conds = _first_child(_find(root, "Rankings"), "Conditions")
+        checked = 0
+        for c in conds:
+            if _localname(c.tag) != "Condition" or c.get("use") != "true":
+                continue
+            cv = next((v for v in c.iter()
+                       if _localname(v.tag) == "Column-Value" and v.get("column")), None)
+            if cv is None or not cv.get("sampleType"):
+                continue
+            assert cv.get("sampleType") == "10", f"{cv.get('column')} quedó en IS+OOS"
+            checked += 1
+        assert checked > 0
+        assert any(c["setting"] == "Rankings.sample_type" for c in report["changes"])
+
+    def test_genetic_sample_type_is_independent(self, cfx_file: Path, tmp_path: Path):
+        """sample_type del genético no debe arrastrar el de Rankings."""
+        out = tmp_path / "st2.cfx"
+        apply_builder_profile(cfx_file, out, {"genetic": {"sample_type": 10}})
+        root = load_cfx_xml(out)
+        for c in _first_child(_find(root, "BuildMode"), "Conditions"):
+            if _localname(c.tag) != "Condition" or c.get("use") != "true":
+                continue
+            cv = next((v for v in c.iter()
+                       if _localname(v.tag) == "Column-Value" and v.get("column")), None)
+            if cv is not None and cv.get("sampleType"):
+                assert cv.get("sampleType") == "10"
+
+
+class TestDataPeriod:
+    """Período completo testeado y partición In-Sample / Out-of-Sample."""
+
+    def test_period_and_is_oos_split(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "data.cfx"
+        report = apply_builder_profile(cfx_file, out, {
+            "data": {
+                "date_from": "2020-01-01",
+                "date_to": "2026-09-16",
+                "out_of_sample": [
+                    {"from": "2020-01-01", "to": "2024-01-09", "type": "isv"},
+                    {"from": "2024-01-09", "to": "2026-09-16"},
+                ],
+            }
+        })
+        assert report["warnings"] == []
+        root = load_cfx_xml(out)
+
+        # Las fechas van en formato StrategyQuant (con puntos)
+        setups = [el for el in root.iter() if _localname(el.tag) == "Setup"]
+        assert setups
+        assert all(s.get("dateFrom") == "2020.01.01" for s in setups)
+        assert all(s.get("dateTo") == "2026.09.16" for s in setups)
+
+        oos = _find(root, "OutOfSample")
+        ranges = [r for r in oos if _localname(r.tag) == "Range"]
+        assert len(ranges) == 2
+        assert ranges[0].get("dateFrom") == "2020.01.01"
+        assert ranges[0].get("type") == "isv"      # In-Sample
+        assert ranges[1].get("dateFrom") == "2024.01.09"
+        assert ranges[1].get("type") is None       # sin type = Out-of-Sample
+
+    def test_invalid_range_is_reported(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "bad.cfx"
+        report = apply_builder_profile(cfx_file, out, {
+            "data": {"out_of_sample": [{"from": "2020-01-01"}]}  # falta "to"
+        })
+        assert any("out_of_sample" in w for w in report["warnings"])
+        assert out.exists()
+
+    def test_unknown_genetic_key_reported(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "unkg.cfx"
+        report = apply_builder_profile(cfx_file, out, {
+            "genetic": {"no_existe_esta_clave": 1}
+        })
+        assert any("no_existe_esta_clave" in w for w in report["warnings"])
+
+
 class TestBuilderProfiles:
     def test_load_yaml_profile(self, tmp_path: Path):
         p = tmp_path / "perfil.yaml"
@@ -284,3 +450,90 @@ class TestBuilderProfiles:
         prof = load_builder_profile(repo_profile)
         assert "risk_reward" in prof
         assert prof["risk_reward"]["limit_slpt_rrr"] is True
+
+
+class TestBlockFixedParams:
+    """Fijar parámetros de bloque con un set predefinido de StrategyQuant.
+
+    Es lo que permite que un bloque con parámetros aleatorios —las horas de inicio y
+    fin de `Prices.SessionLow`, por ejemplo— represente un nivel concreto (el rango
+    overnight) en lugar de un sorteo entre 0 y 23.
+    """
+
+    @staticmethod
+    def _predefined(path, key):
+        root = load_cfx_xml(path)
+        blk = next(el for el in root.iter()
+                   if _localname(el.tag) == "Block" and el.get("key") == key)
+        pre = _first_child(blk, "Predefined")
+        if pre is None:
+            return {}
+        return {p.get("key"): p for p in pre.iter() if _localname(p.tag) == "Param"}
+
+    def test_fixed_values_are_written(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "fixed.cfx"
+        apply_builder_profile(cfx_file, out, {"blocks": {"fixed_params": {
+            "Prices.SessionLow": {"#StartHours#": 20, "#StartMinutes#": 0,
+                                  "#EndHours#": 12, "#EndMinutes#": 0, "#Shift#": 1}}}})
+        p = self._predefined(out, "Prices.SessionLow")
+        assert p["#StartHours#"].get("generation") == "fixed"
+        assert p["#StartHours#"].get("defaultValue") == "20"
+        assert p["#EndHours#"].get("defaultValue") == "12"
+        assert p["#Shift#"].get("defaultValue") == "1"
+
+    def test_unlisted_params_keep_random_generation(self, cfx_file: Path, tmp_path: Path):
+        """Los parámetros no pedidos deben conservar su generación aleatoria."""
+        out = tmp_path / "fixed2.cfx"
+        apply_builder_profile(cfx_file, out, {"blocks": {"fixed_params": {
+            "Prices.SessionLow": {"#StartHours#": 20}}}})
+        p = self._predefined(out, "Prices.SessionLow")
+        assert p["#Chart#"].get("generation") == "random"
+
+    def test_unknown_block_raises(self, cfx_file: Path, tmp_path: Path):
+        with pytest.raises(ValueError, match="NoExiste"):
+            apply_builder_profile(cfx_file, tmp_path / "x.cfx",
+                                  {"blocks": {"fixed_params": {"NoExiste": {"#A#": 1}}}})
+
+    def test_unknown_param_raises(self, cfx_file: Path, tmp_path: Path):
+        """Pasar un parámetro que el bloque no tiene debe abortar, no ignorarse."""
+        with pytest.raises(ValueError, match="inexistentes"):
+            apply_builder_profile(cfx_file, tmp_path / "y.cfx",
+                                  {"blocks": {"fixed_params": {
+                                      "Prices.SessionLow": {"#Nope#": 1}}}})
+
+
+class TestSetCategoryStrict:
+    """`set_<categoria>` deja el catálogo EXACTO: activa las pedidas y apaga el resto.
+
+    Es lo que permite aislar un edge: con el catálogo reducido a sus bloques, el
+    generador no puede armar reglas de otras familias.
+    """
+
+    def test_set_indicators_leaves_only_those(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "only.cfx"
+        wanted = ["CrossesBelow", "Prices.Close", "Prices.SessionLow"]
+        apply_builder_profile(cfx_file, out, {"blocks": {"set_indicators": wanted}})
+        cfg = parse_cfx(out)
+        on = {b["key"] for b in cfg.blocks["building_blocks"]
+              if b.get("use") and b.get("category") == "indicators"}
+        assert on == set(wanted)
+
+    def test_set_signals_empty_disables_all(self, cfx_file: Path, tmp_path: Path):
+        out = tmp_path / "nosig.cfx"
+        apply_builder_profile(cfx_file, out, {"blocks": {"set_signals": []}})
+        cfg = parse_cfx(out)
+        on = [b["key"] for b in cfg.blocks["building_blocks"]
+              if b.get("use") and b.get("category") == "signals"]
+        assert on == []
+
+    def test_sqn_can_be_used_as_fitness_and_filter(self, cfx_file: Path, tmp_path: Path):
+        """SQN es lo que el usuario quiere maximizar: debe poder fijarse en ambos lados."""
+        out = tmp_path / "sqn.cfx"
+        report = apply_builder_profile(cfx_file, out, {
+            "rankings": {"fitness": "SQNScore", "sqn_score_min": 0.5},
+            "genetic": {"sqn_score_min": 0.3},
+        })
+        assert report["warnings"] == []
+        raw = zipfile.ZipFile(out).read("config.xml").decode("utf-8", "replace")
+        assert 'type="SQNScore"' in raw
+        assert 'column="SQNScore"' in raw

@@ -15,11 +15,14 @@ from .mt5_instruments import sync as mt5_sync, sync_sessions, detect_mt5_install
 from .reality_check import reality_check as run_reality_check
 from .results_analyzer import analyze_results
 from .round_trip import verify_round_trip
+from .monte_carlo import analyze as mc_analyze, format_report as format_mc
+from .swap_audit import audit as swap_audit
 from .mt5_instruments import detect_mt5_installations as _detect
 from .compare import compare_configs
 from .data_downloader import download_dukascopy, download_yfinance, load_data, list_cache, clear_cache
 from .edge_analyzer import analyze_market
 from .date_optimizer import optimize_date_ranges
+from .signal_screen import screen as screen_signals
 from .cfx_builder import apply_builder_profile, load_builder_profile
 from .sqb_builder import (
     build_recommended_sqb,
@@ -811,6 +814,98 @@ def cmd_catalog(args):
     return 0
 
 
+def cmd_signal_screen(args):
+    """Mide el edge direccional REAL de las señales candidatas sobre datos de mercado.
+
+    En vez de asumir que una señal "de tendencia" sirve para operar, calcula el
+    retorno forward de cada condición con corrección Newey-West y contrasta su
+    estabilidad In-Sample vs Out-of-Sample.
+    """
+    print(f"Screener de señales: {args.symbol} ({args.timeframe})")
+    print(f"  Ventana operativa: {args.window_from:02d}-{args.window_to:02d} UTC | "
+          f"dirección buscada: {args.direction} | fuente: {args.source}")
+
+    try:
+        if args.source == "yfinance":
+            data_path = download_yfinance(symbol=args.symbol, timeframe=args.timeframe,
+                                          period=args.period)
+        else:
+            data_path = download_dukascopy(
+                symbol=args.symbol,
+                timeframe=args.timeframe.replace("m", "").replace("h", "H"),
+                output_dir="./data",
+            )
+    except ImportError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR descargando datos: {e}", file=sys.stderr)
+        return 1
+
+    df = load_data(data_path)
+    try:
+        horizons = tuple(int(x) for x in str(args.horizons).split(",") if x.strip())
+    except ValueError:
+        print("ERROR: --horizons debe ser una lista de enteros, ej. 4,8,24", file=sys.stderr)
+        return 1
+    if not horizons:
+        print("ERROR: --horizons no puede estar vacío", file=sys.stderr)
+        return 1
+
+    try:
+        res = screen_signals(df, window_from=args.window_from, window_to=args.window_to,
+                             horizons=horizons, min_n=args.min_n,
+                             direction=args.direction, split=args.split)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+    out = Path(args.output) if args.output else \
+        Path(f"signal_screen_{args.symbol}_{args.timeframe}.json")
+    out.write_text(json.dumps(res, indent=2, ensure_ascii=False, default=str),
+                   encoding="utf-8")
+
+    info = res["data_info"]
+    print(f"\n  Barras: {info['barras']} ({info['años']} años — "
+          f"{info['desde'][:10]} → {info['hasta'][:10]})")
+    print(f"  Señales evaluadas: {len(res['resultados'])} (señal × horizonte)")
+
+    print("\n  LÍNEA BASE (retorno medio sin filtro — el 'drift' del mercado):")
+    for hk, bv in res["baseline"].items():
+        if bv["mean_fwd_pct"] is not None:
+            print(f"    {hk:>4}: {bv['mean_fwd_pct']:+.3f}%   (n={bv['n']})")
+
+    rob = res["destacados"]["edge_robusto_is_oos"]
+    print(f"\n  EDGE ROBUSTO (favorable a {args.direction}, significativo y consistente IS/OOS):")
+    if not rob:
+        print("    — ninguno: ninguna señal supera el filtro de robustez.")
+    for r in rob[:args.top]:
+        print(f"    {r['senal'][:36]:<36} h{r['horizonte']:<3} n={r['n']:<5} "
+              f"edge={r['edge_pct']:+.3f}%  p={r['p_value']:.4f}  "
+              f"IS={r['is_mean_pct']:+.3f}%  OOS={r['oos_mean_pct']:+.3f}%")
+
+    signif = [r for r in res["destacados"]["edge_significativo"]
+              if r not in rob]
+    if signif:
+        print("\n  SIGNIFICATIVAS PERO SIN CONSISTENCIA IS/OOS (cautela):")
+        for r in signif[:args.top]:
+            print(f"    {r['senal'][:36]:<36} h{r['horizonte']:<3} n={r['n']:<5} "
+                  f"edge={r['edge_pct']:+.3f}%  p={r['p_value']:.4f}")
+
+    print(f"\n  EN CONTRA DE {args.direction.upper()} (significativas al revés):")
+    contra = res["destacados"]["en_contra_de_la_direccion"]
+    if not contra:
+        print("    — ninguna.")
+    for r in contra[:args.top]:
+        print(f"    {r['senal'][:36]:<36} h{r['horizonte']:<3} n={r['n']:<5} "
+              f"ret={r['mean_fwd_pct']:+.3f}%  p={r['p_value']:.4f}")
+
+    print(f"\n✓ Resultado completo → {out}")
+    for n in res["notas"]:
+        print(f"  · {n}")
+    return 0
+
+
 def cmd_cache(args):
     """Gestiona cache de datos."""
     if args.list:
@@ -1041,6 +1136,83 @@ def cmd_mt5_bootstrap(args):
     return 0
 
 
+def cmd_mc(args):
+    """Monte Carlo sobre una serie de trades (R o dinero): fragilidad, ruina, drawdown.
+
+    Entrada: un archivo con los resultados por trade, uno por línea. Puede ser:
+      - salida de edge_backtest (R-múltiplos) en un .json/.txt/.csv
+      - un CSV con una columna que contenga el profit por trade
+    """
+    import csv
+    inp = Path(args.input)
+    if not inp.exists():
+        print(f"ERROR: no existe {inp}", file=sys.stderr)
+        return 1
+
+    # Cargar la serie de trades: números por línea, o primera columna numérica de un CSV
+    vals: list[float] = []
+    text = inp.read_text(encoding="utf-8", errors="replace")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) > 1 and ("," in lines[1] or ";" in lines[1]):
+        delim = ";" if lines[1].count(";") > lines[1].count(",") else ","
+        rows = list(csv.reader(lines, delimiter=delim))
+        header = rows[0]
+        # buscar una columna que parezca profit/pnl/r
+        idx = 0
+        for i, h in enumerate(header):
+            if any(k in h.lower() for k in ("profit", "pnl", "r", "result", "trade")):
+                idx = i
+                break
+        for row in rows[1:]:
+            if idx < len(row):
+                try:
+                    vals.append(float(row[idx].replace(" ", "").replace("$", "")))
+                except ValueError:
+                    pass
+    else:
+        for ln in lines:
+            try:
+                vals.append(float(ln))
+            except ValueError:
+                pass
+
+    if not vals:
+        print(f"ERROR: no se pudo leer una serie de trades de {inp}", file=sys.stderr)
+        return 1
+
+    res = mc_analyze(vals, n_runs=args.runs, seed=args.seed,
+                     ruin_level=args.ruin, profitable_level=args.profitable)
+    print(format_mc(res))
+    if args.output:
+        import json
+        Path(args.output).write_text(json.dumps(res, indent=2, ensure_ascii=False),
+                                     encoding="utf-8")
+        print(f"\n✓ JSON → {args.output}")
+    return 0
+
+
+def cmd_swap_audit(args):
+    """Audita el swap de un símbolo: % anualizado y costo sobre el gross profit."""
+    try:
+        a = swap_audit(args.specs_csv, args.symbol, direction=args.direction,
+                       lots=args.lots, price=args.price,
+                       avg_hold_nights=args.avg_hold_nights,
+                       n_trades=args.n_trades, gross_profit=args.gross_profit)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    print(a.render())
+    if args.output:
+        import dataclasses
+        import json
+        payload = dataclasses.asdict(a)
+        payload["drag"] = payload.get("drag")
+        Path(args.output).write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                                     encoding="utf-8")
+        print(f"\n✓ JSON → {args.output}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sqxtools",
@@ -1225,6 +1397,29 @@ def main(argv: list[str] | None = None) -> int:
     p_rt.add_argument("--saved", required=True, help=".cfx guardado por SQ después de cargarlo")
     p_rt.set_defaults(func=cmd_round_trip)
 
+    # mc
+    p_mc = sub.add_parser("mc", help="Monte Carlo sobre una serie de trades (R o dinero)")
+    p_mc.add_argument("input", help="Archivo con los resultados por trade (uno por línea o CSV)")
+    p_mc.add_argument("--runs", type=int, default=1000, help="Número de simulaciones (default 1000)")
+    p_mc.add_argument("--seed", type=int, default=None, help="Semilla para reproducibilidad")
+    p_mc.add_argument("--ruin", type=float, default=None, help="Umbral de ruina (ej. -3.0 R)")
+    p_mc.add_argument("--profitable", type=float, default=0.0, help="Umbral de 'rentable' (default 0)")
+    p_mc.add_argument("-o", "--output", default="", help="Guardar el reporte JSON")
+    p_mc.set_defaults(func=cmd_mc)
+
+    # swap-audit
+    p_sw = sub.add_parser("swap-audit", help="Audita el swap: % anualizado y costo sobre el gross profit")
+    p_sw.add_argument("--specs-csv", required=True, help="sqx_specs.csv generado por mt5-sync")
+    p_sw.add_argument("--symbol", required=True, help="Símbolo a auditar (ej. USTECm)")
+    p_sw.add_argument("--direction", choices=["short", "long"], default="short")
+    p_sw.add_argument("--lots", type=float, default=1.0, help="Lotes de referencia (default 1.0)")
+    p_sw.add_argument("--price", type=float, default=None, help="Precio de referencia; si se omite usa 0")
+    p_sw.add_argument("--avg-hold-nights", type=float, default=None, help="Noches promedio en posición")
+    p_sw.add_argument("--n-trades", type=int, default=None, help="Número de round-trips")
+    p_sw.add_argument("--gross-profit", type=float, default=None, help="Profit bruto (suma de deals, SIN swap)")
+    p_sw.add_argument("-o", "--output", default="", help="Guardar el reporte JSON")
+    p_sw.set_defaults(func=cmd_swap_audit)
+
     # mt5-bootstrap
     p_bs = sub.add_parser("mt5-bootstrap", help="Setup completo: detecta MT5 + specs + sesiones → ambos XML")
     p_bs.add_argument("--mt5-path", default="", help="Ruta de MT5; si se omite usa la primera detectada")
@@ -1245,6 +1440,30 @@ def main(argv: list[str] | None = None) -> int:
     p_dates.add_argument("--num-oos", type=int, default=3, help="Períodos OOS para walk-forward")
     p_dates.add_argument("-o", "--output", help="Salida JSON")
     p_dates.set_defaults(func=cmd_date_optimizer)
+
+    # signal-screen
+    p_ss = sub.add_parser("signal-screen",
+                          help="Mide el edge real de las señales sobre datos de mercado")
+    p_ss.add_argument("--symbol", default="NAS100", help="Símbolo (NAS100, EURUSD, ...)")
+    p_ss.add_argument("--timeframe", default="H1", help="Temporalidad (H1, M15, ...)")
+    p_ss.add_argument("--source", choices=["dukascopy", "yfinance"], default="dukascopy",
+                      help="Fuente de datos")
+    p_ss.add_argument("--period", default="5y", help="Período (solo para yfinance)")
+    p_ss.add_argument("--window-from", type=int, default=12,
+                      help="Hora UTC de inicio de la ventana operativa (default 12)")
+    p_ss.add_argument("--window-to", type=int, default=20,
+                      help="Hora UTC de fin de la ventana operativa (default 20)")
+    p_ss.add_argument("--horizons", default="4,8,24",
+                      help="Horizontes forward en barras, separados por coma (default 4,8,24)")
+    p_ss.add_argument("--direction", choices=["short", "long"], default="short",
+                      help="Dirección para la que se busca edge (default short)")
+    p_ss.add_argument("--min-n", type=int, default=50,
+                      help="Muestra mínima para reportar una señal (default 50)")
+    p_ss.add_argument("--split", type=float, default=0.6,
+                      help="Fracción In-Sample para el contraste IS/OOS (default 0.6)")
+    p_ss.add_argument("--top", type=int, default=10, help="Cuántas señales mostrar")
+    p_ss.add_argument("-o", "--output", help="Archivo JSON de salida")
+    p_ss.set_defaults(func=cmd_signal_screen)
 
     args = ap.parse_args(argv)
     if not args.command:

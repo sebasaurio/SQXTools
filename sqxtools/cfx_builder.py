@@ -19,6 +19,7 @@ Uso:
     apply_builder_profile("v5.cfx", "v6.cfx", "perfil.yaml")
 """
 
+import copy
 import difflib
 import json
 import xml.etree.ElementTree as ET
@@ -305,6 +306,295 @@ def _add_ranking_condition(root: ET.Element, column: str, comparator: str,
     return True
 
 
+# === Condiciones de filtro genéricas (Rankings y BuildMode) ===
+#
+# Rankings y BuildMode comparten la MISMA estructura de <Condition>. Lo que cambia
+# es el contenedor y el momento en que SQ los evalúa:
+#   - Rankings  → filtros de salida al databank (después del build)
+#   - BuildMode → condiciones de supervivencia del genético (durante la evolución)
+# Filtrar en el genético evita gastar generaciones en estrategias que el ranking
+# va a descartar al final.
+
+# Claves escalares del perfil para las condiciones del genético → (columna, comparador)
+GENETIC_KEYS: dict[str, tuple[str, str]] = {
+    "profit_factor_min": ("ProfitFactor", ">="),
+    "number_of_trades_min": ("NumberOfTrades", ">="),
+    "avg_bars_in_trade_min": ("AvgBarsInTrade", ">="),
+    "sharpe_ratio_min": ("SharpeRatio", ">="),
+    "return_dd_ratio_min": ("ReturnDDRatio", ">="),
+    "win_loss_ratio_min": ("WinLossRatio", ">="),
+    "rsquared_min": ("RSquared", ">="),
+    "percent_profitable_min": ("PercentProfitable", ">="),
+    "sqn_score_min": ("SQNScore", ">="),
+    "winning_pct_min": ("WinningPct", ">="),
+    "cagr_min": ("CAGR", ">="),
+    "stagnation_max": ("Stagnation", "<="),
+    "max_consec_losses_max": ("MaxConsecLosses", "<="),
+}
+
+# Columnas cuyo valor es entero (afecta el atributo `format` de la condición)
+INTEGER_COLUMNS = frozenset({
+    "NumberOfTrades", "MaxConsecLosses", "Stagnation", "BarCount", "MaxTradesPerDay",
+})
+
+
+def _column_format(column: str) -> str:
+    return "Integer" if column in INTEGER_COLUMNS else "Decimal2"
+
+
+def _buildmode_section(root: ET.Element) -> ET.Element | None:
+    """Devuelve la sección <BuildMode> (configuración del genético)."""
+    for el in root.iter():
+        if _clean(el.tag) == "BuildMode":
+            return el
+    return None
+
+
+def _filter_section(root: ET.Element, section: str) -> ET.Element | None:
+    """Sección contenedora de condiciones de filtro: 'Rankings' o 'BuildMode'."""
+    if section == "Rankings":
+        return _rankings_section(root)
+    if section == "BuildMode":
+        return _buildmode_section(root)
+    return None
+
+
+def _conditions_container(root: ET.Element, section: str) -> ET.Element | None:
+    """Devuelve el <Conditions> DIRECTO de la sección indicada.
+
+    Ojo: `_find_section(root, "Conditions")` devolvería el de <Rankings> siempre,
+    que es el primer <Conditions> del documento. Hay que scopearlo a su sección.
+    """
+    sec = _filter_section(root, section)
+    if sec is None:
+        return None
+    for el in sec:
+        if _clean(el.tag) == "Conditions":
+            return el
+    return None
+
+
+def _iter_filter_conditions(root: ET.Element, section: str):
+    """Itera las <Condition> de `section` ('Rankings' o 'BuildMode')."""
+    conds = _conditions_container(root, section)
+    if conds is None:
+        return
+    for cond in conds:
+        if _clean(cond.tag) == "Condition":
+            yield cond
+
+
+def _left_column_value(cond: ET.Element) -> ET.Element | None:
+    """Primer <Column-Value> dentro de <Left-Side> (el lado que define la métrica).
+
+    Se limita a Left-Side a propósito: en condiciones con dos columnas (comparativas
+    IS vs OOS) el Right-Side tiene su propio sampleType y no debe tocarse.
+    """
+    for side in cond:
+        if _clean(side.tag) != "Left-Side":
+            continue
+        for el in side.iter():
+            if _clean(el.tag) == "Column-Value" and el.get("column"):
+                return el
+    return None
+
+
+def _set_sample_type(root: ET.Element, section: str, value: str,
+                     changes: list, columns=None) -> bool:
+    """Fija el `sampleType` de las condiciones ACTIVAS de una sección.
+
+    sampleType: 10 = In-Sample · 20 = Out-of-Sample · 127 = IS+OOS combinados.
+
+    Por qué importa: una condición en 127 filtra sobre IS **y** OOS a la vez, así
+    que el out-of-sample participa de la selección y deja de ser un juez
+    independiente. Para validar de verdad, los filtros van en 10 (solo IS).
+    """
+    n_changed = n_same = 0
+    for cond in _iter_filter_conditions(root, section):
+        if cond.get("use", "false") != "true":
+            continue
+        if columns is not None and _condition_column(cond) not in columns:
+            continue
+        cv = _left_column_value(cond)
+        if cv is None or not cv.get("sampleType"):
+            continue
+        if cv.get("sampleType") == value:
+            n_same += 1
+        else:
+            cv.set("sampleType", value)
+            n_changed += 1
+
+    if n_changed == 0 and n_same == 0:
+        changes.append({"setting": f"{section}.sample_type", "status": "condition_not_found"})
+        return False
+    changes.append({"setting": f"{section}.sample_type",
+                    "status": "changed" if n_changed else "unchanged",
+                    "to": value, "changed_count": n_changed, "already": n_same})
+    return True
+
+
+def _repurpose_condition(cond: ET.Element, column: str, comparator: str,
+                         value: str) -> None:
+    """Reescribe una condición existente para que mida `column`."""
+    cond.set("use", "true")
+    cv = _left_column_value(cond)
+    if cv is not None:
+        cv.set("column", column)
+        if cv.get("class"):
+            cv.set("class", column)
+        if cv.get("format"):
+            cv.set("format", _column_format(column))
+    for el in cond.iter():
+        if _clean(el.tag) == "Comparator":
+            el.set("value", comparator)
+            break
+    for el in cond.iter():
+        if _clean(el.tag) == "Numeric-Value":
+            el.set("value", value)
+            break
+
+
+def _apply_condition(root: ET.Element, section: str, column: str, comparator: str,
+                     value: str, use: bool, changes: list) -> bool:
+    """Setea o agrega una condición de filtro en 'Rankings' o 'BuildMode'.
+
+    Orden de preferencia:
+      1. Si la columna ya existe → se modifica (use / comparador / valor).
+      2. Si no, se REUTILIZA un slot inactivo con lado derecho numérico (mismo
+         criterio que `_add_ranking_condition`: SQ re-instancia las condiciones
+         construidas a mano y reinicia su valor al default).
+      3. Si no hay slot libre, se CLONA una condición numérica existente. Un clon
+         conserva todos los atributos que SQ espera, pero el re-instanciado puede
+         resetearlo igual: se reporta como `cloned_needs_check` para verificar en la UI.
+    """
+    # 1. Existente
+    for cond in _iter_filter_conditions(root, section):
+        if _condition_column(cond) != column:
+            continue
+        detail: dict = {"setting": f"{section}.{column}", "changes": []}
+        if use is not None:
+            new_use = "true" if use else "false"
+            if cond.get("use") != new_use:
+                detail["changes"].append(f"use: {cond.get('use')} → {new_use}")
+                cond.set("use", new_use)
+        if comparator is not None:
+            for el in cond.iter():
+                if _clean(el.tag) == "Comparator":
+                    if el.get("value") != comparator:
+                        detail["changes"].append(f"comparator: {el.get('value')} → {comparator}")
+                        el.set("value", comparator)
+                    break
+        if value is not None:
+            for el in cond.iter():
+                if _clean(el.tag) == "Numeric-Value":
+                    if el.get("value") != value:
+                        detail["changes"].append(f"value: {el.get('value')} → {value}")
+                        el.set("value", value)
+                    break
+        detail["status"] = "changed" if detail["changes"] else "unchanged"
+        changes.append(detail)
+        return True
+
+    # 2. Reutilizar slot inactivo con valor numérico
+    for cond in _iter_filter_conditions(root, section):
+        if cond.get("use", "false") == "true":
+            continue
+        if _condition_numeric_value(cond) is None:
+            continue
+        prev_column = _condition_column(cond)
+        _repurpose_condition(cond, column, comparator, value)
+        changes.append({"setting": f"{section}.{column}", "status": "added",
+                        "reused_condition": prev_column,
+                        "comparator": comparator, "value": value})
+        return True
+
+    # 3. Clonar una condición numérica (SQ puede resetearla — verificar en la UI)
+    proto = None
+    for cond in _iter_filter_conditions(root, section):
+        if _condition_numeric_value(cond) is not None:
+            proto = cond
+            break
+    container = _conditions_container(root, section)
+    if proto is None or container is None:
+        changes.append({"setting": f"{section}.{column}",
+                        "status": "conditions_not_found"})
+        return False
+
+    donor = copy.deepcopy(proto)
+    container.append(donor)
+    _repurpose_condition(donor, column, comparator, value)
+    changes.append({"setting": f"{section}.{column}", "status": "cloned_needs_check",
+                    "cloned_from": _condition_column(proto),
+                    "comparator": comparator, "value": value})
+    return True
+
+
+# === Período de datos: In-Sample / Out-of-Sample ===
+
+def _norm_date(value) -> str:
+    """Normaliza una fecha al formato de StrategyQuant: 2020-01-01 → 2020.01.01."""
+    return str(value).strip().replace("-", ".").replace("/", ".")
+
+
+def _set_data_dates(root: ET.Element, date_from, date_to, changes: list) -> bool:
+    """Fija el rango completo testeado (<Setup dateFrom/dateTo>)."""
+    setups = [el for el in root.iter() if _clean(el.tag) == "Setup"]
+    if not setups:
+        changes.append({"setting": "Data.date_from", "status": "section_not_found"})
+        return False
+    for setup in setups:
+        if date_from is not None:
+            setup.set("dateFrom", _norm_date(date_from))
+        if date_to is not None:
+            setup.set("dateTo", _norm_date(date_to))
+    changes.append({"setting": "Data.date_from/date_to", "status": "changed",
+                    "from": _norm_date(date_from), "to": _norm_date(date_to),
+                    "setups": len(setups)})
+    return True
+
+
+def _rewrite_out_of_sample(root: ET.Element, ranges, changes: list) -> bool:
+    """Reescribe la partición IS/OOS de <OutOfSample>.
+
+    Cada rango: {"from": "2020-01-01", "to": "2024-01-09", "type": "isv"} donde
+    `type: isv` marca In-Sample (validación) y su ausencia marca Out-of-Sample.
+    """
+    oos = None
+    for el in root.iter():
+        if _clean(el.tag) == "OutOfSample":
+            oos = el
+            break
+    if oos is None:
+        changes.append({"setting": "Data.out_of_sample", "status": "section_not_found"})
+        return False
+    if not isinstance(ranges, list):
+        changes.append({"setting": "Data.out_of_sample", "status": "invalid_range"})
+        return False
+
+    old = [f"{r.get('dateFrom')}→{r.get('dateTo')}"
+           for r in oos if _clean(r.tag) == "Range"]
+    for r in list(oos):
+        if _clean(r.tag) == "Range":
+            oos.remove(r)
+
+    applied = []
+    for spec in ranges:
+        if not isinstance(spec, dict) or "from" not in spec or "to" not in spec:
+            changes.append({"setting": "Data.out_of_sample", "status": "invalid_range"})
+            continue
+        r = ET.SubElement(oos, "Range")
+        r.set("dateFrom", _norm_date(spec["from"]))
+        r.set("dateTo", _norm_date(spec["to"]))
+        if spec.get("type"):
+            r.set("type", str(spec["type"]))
+        applied.append(f"{_norm_date(spec['from'])}→{_norm_date(spec['to'])}"
+                       + (" [IS]" if spec.get("type") else " [OOS]"))
+
+    changes.append({"setting": "Data.out_of_sample", "status": "changed",
+                    "from": old, "to": applied})
+    return True
+
+
 def _set_exit_probability(root: ET.Element, block_key: str, value: str,
                           changes: list) -> bool:
     """Setea el atributo probability de un <Block> en <ExitTypes>."""
@@ -392,6 +682,62 @@ def _set_block_use(root: ET.Element, category: str, keys, use: bool,
 
 
 # === Perfiles de builder (YAML/JSON) ===
+
+def _set_block_fixed_params(root: ET.Element, category: str, spec: dict,
+                            changes: list, strict: bool = True) -> None:
+    """Fija los parámetros de un bloque con un set predefinido de StrategyQuant.
+
+    `spec` = `{"Prices.SessionLow": {"#StartHours#": 20, "#EndHours#": 12}}`.
+
+    Por qué hace falta: los parámetros de los bloques vienen con
+    `generation="random"`, así que el builder los sortea. Sin fijarlos, un bloque
+    como `Prices.SessionLow` (horas de inicio/fin 0–23) nunca representa el rango
+    overnight que se quiere probar. El set `<Predefined><Params>` con
+    `generation="fixed" defaultValue` es el mecanismo de SQ para eso.
+    """
+    blocks = {el.get("key"): el for el in _iter_cfx_blocks(root, category)}
+    for key, params in spec.items():
+        el = blocks.get(key)
+        if el is None:
+            if strict:
+                raise ValueError(
+                    f"Bloque desconocido en la categoría '{category}': {key}")
+            continue
+        generated = el.find("Generated")
+        proto = {}
+        if generated is not None:
+            proto = {p.get("key"): p for p in generated.findall("Param")}
+        unknown = [k for k in params if k not in proto]
+        if unknown and strict:
+            raise ValueError(
+                f"{key}: parámetros inexistentes {unknown}. "
+                f"Disponibles: {sorted(proto)}")
+        pre = el.find("Predefined")
+        if pre is None:
+            pre = ET.SubElement(el, "Predefined")
+        for child in list(pre):
+            pre.remove(child)
+        pre.set("changed", "true")
+        ps = ET.SubElement(pre, "Params")
+        ps.set("name", "Fixed")
+        ps.set("weight", "10")
+        # Se copian TODOS los parámetros del bloque y se sobrescriben los pedidos:
+        # SQ espera el juego completo, no solo los modificados.
+        for pk, src in proto.items():
+            p = ET.SubElement(ps, "Param")
+            p.set("key", pk)
+            p.set("name", src.get("name", pk))
+            p.set("type", src.get("type", "int"))
+            if pk in params:
+                p.set("generation", "fixed")
+                p.set("defaultValue", str(params[pk]))
+            else:
+                for a in ("generation", "minValue", "maxValue", "step", "allCharts"):
+                    if src.get(a) is not None:
+                        p.set(a, src.get(a))
+        changes.append({"setting": f"blocks.{key}.fixed_params", "status": "changed",
+                        "from": "random", "to": str(params)})
+
 
 def load_builder_profile(path: str | Path) -> dict:
     """Carga un perfil de builder desde YAML o JSON."""
@@ -518,6 +864,8 @@ def apply_builder_profile(
         ("sharpe_ratio_min", "SharpeRatio"),
         ("drawdown_pct_max", "DrawdownPct"),
         ("rsquared_min", "RSquared"),
+        ("sqn_score_min", "SQNScore"),
+        ("sqn_min", "SQN"),
     ):
         if key not in rk:
             continue
@@ -527,6 +875,29 @@ def apply_builder_profile(
         if not _set_ranking_condition(root, col, value, comparator, True, changes):
             changes.pop()  # descarta el "condition_not_found"
             _add_ranking_condition(root, col, comparator, value, changes)
+
+    # --- Genético: condiciones de supervivencia del BuildMode ---
+    # Son DISTINTAS de las de Ranking: el GA las evalúa por generación. Alinearlas
+    # con el ranking evita gastar generaciones en estrategias que se descartan al final.
+    ge = profile.get("genetic") or {}
+    for key, (col, comp) in GENETIC_KEYS.items():
+        if key in ge:
+            _apply_condition(root, "BuildMode", col, comp, _as_num(ge[key]), True, changes)
+
+    # --- sampleType: filtrar solo en In-Sample (10) y dejar el OOS limpio ---
+    # 10 = IS · 20 = OOS · 127 = IS+OOS. Va DESPUÉS de setear condiciones para
+    # alcanzar también las que se acaban de agregar/reutilizar.
+    if "sample_type" in rk:
+        _set_sample_type(root, "Rankings", _as_num(rk["sample_type"]), changes)
+    if "sample_type" in ge:
+        _set_sample_type(root, "BuildMode", _as_num(ge["sample_type"]), changes)
+
+    # --- Datos: período completo y partición IS/OOS ---
+    dt = profile.get("data") or {}
+    if "date_from" in dt or "date_to" in dt:
+        _set_data_dates(root, dt.get("date_from"), dt.get("date_to"), changes)
+    if dt.get("out_of_sample"):
+        _rewrite_out_of_sample(root, dt["out_of_sample"], changes)
 
     # --- Exits ---
     ex = profile.get("exits") or {}
@@ -550,15 +921,32 @@ def apply_builder_profile(
             rem_key = f"remove_{cat}"
             if rem_key in bl:
                 _set_block_use(root, cat, bl[rem_key], False, changes, strict=strict)
-        if "set_signals" in bl:
-            # Lista exacta: activa las indicadas y desactiva el resto
-            wanted = set(bl["set_signals"])
-            _set_block_use(root, "signals", wanted, True, changes, strict=strict)
-            for el in _iter_cfx_blocks(root, "signals"):
-                if el.get("key") not in wanted and el.get("use") == "true":
-                    el.set("use", "false")
-                    changes.append({"setting": f"blocks.{el.get('key')}",
-                                    "status": "changed", "from": "true", "to": "false"})
+            # `set_<categoria>`: lista EXACTA — activa las indicadas y desactiva el resto.
+            # Es lo que permite aislar un edge: con el catálogo reducido a sus bloques,
+            # el generador no puede combinar señales ajenas.
+            set_key = f"set_{cat}"
+            if set_key in bl:
+                wanted = set(bl[set_key])
+                _set_block_use(root, cat, wanted, True, changes, strict=strict)
+                for el in _iter_cfx_blocks(root, cat):
+                    if el.get("key") not in wanted and el.get("use") == "true":
+                        el.set("use", "false")
+                        changes.append({"setting": f"blocks.{el.get('key')}",
+                                        "status": "changed", "from": "true", "to": "false"})
+        if "fixed_params" in bl:
+            pending = dict(bl["fixed_params"])
+            for cat in BLOCK_CATEGORIES:
+                spec = {k: v for k, v in pending.items()
+                        if any(e.get("key") == k for e in _iter_cfx_blocks(root, cat))}
+                if spec:
+                    _set_block_fixed_params(root, cat, spec, changes, strict=strict)
+                    for k in spec:
+                        pending.pop(k, None)
+            # Un bloque que no existe en NINGUNA categoría se filtraría en silencio
+            # y el perfil parecería aplicado: abortamos para que el error se vea.
+            if pending and strict:
+                raise ValueError(
+                    f"Bloques desconocidos en 'fixed_params': {sorted(pending)}")
 
     # Detectar claves desconocidas en el perfil (se ignorarían en silencio)
     known = {
@@ -576,7 +964,10 @@ def apply_builder_profile(
         "rankings": {"fitness", "return_dd_ratio_min", "profit_factor_min",
                      "win_loss_ratio_min", "percent_profitable_min",
                      "number_of_trades_min", "sharpe_ratio_min",
-                     "drawdown_pct_max", "rsquared_min"},
+                     "drawdown_pct_max", "rsquared_min", "sample_type",
+                     "sqn_score_min", "sqn_min"},
+        "genetic": set(GENETIC_KEYS) | {"sample_type"},
+        "data": {"date_from", "date_to", "out_of_sample"},
         "exits": {"exit_after_bars_probability", "move_sl2be_probability",
                   "profit_target_probability", "stop_loss_probability",
                   "trailing_stop_probability"},
@@ -584,9 +975,9 @@ def apply_builder_profile(
     # Claves válidas dentro de la sección 'blocks'
     known_block_keys = {
         f"{pre}_{cat}"
-        for pre in ("add", "remove")
+        for pre in ("add", "remove", "set")
         for cat in BLOCK_CATEGORIES
-    } | {"set_signals"}
+    } | {"fixed_params"}
     meta_keys = {"name", "description", "symbol", "timeframe"}
     unknown: list = []
     for section, values in profile.items():
@@ -615,7 +1006,8 @@ def apply_builder_profile(
     warnings = [f"{c['setting']}: {c['status']}"
                 for c in changes if c.get("status") in
                 ("section_not_found", "tag_not_found", "param_not_found",
-                 "chart_not_found", "block_not_found", "not_found", "conditions_not_found")]
+                 "chart_not_found", "block_not_found", "not_found", "conditions_not_found",
+                 "invalid_range", "condition_not_found", "cloned_needs_check")]
     warnings += [f"ajuste desconocido ignorado: {u}" for u in unknown]
 
     return {
